@@ -1,0 +1,18 @@
+# Maven
+target/
+*.iml
+.idea/
+.classpath
+.project
+.settings/
+.vscode/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# Cursor
+launch.json
+settings.json

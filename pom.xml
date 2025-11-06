@@ -1,0 +1,117 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.snc</groupId>
+  <artifactId>akeyless-servicenow-credential-resolver</artifactId>
+  <version>${revision}</version>
+  <name>ServiceNow Credential Resolver (Akeyless)</name>
+  <description>ServiceNow MID external credential resolver using Akeyless HTTP API</description>
+  
+  <licenses>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+        <developer>
+            <name>Akeyless</name>
+            <email>support@akeyless.io</email>
+            <organization>Akeyless</organization>
+            <organizationUrl>https://akeyless.io</organizationUrl>
+        </developer>
+    </developers>
+
+  <properties>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <junit.version>4.13.2</junit.version>
+    <jackson.jr.version>2.20.1</jackson.jr.version>
+    <commons.logging.version>1.2</commons.logging.version>
+    <akeyless.cloudid.version>v0.1.2</akeyless.cloudid.version>
+  </properties>
+
+  <dependencies>
+
+    <!-- Lightweight JSON: Jackson JR (replaces databind usage) -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.jr</groupId>
+      <artifactId>jackson-jr-objects</artifactId>
+      <version>${jackson.jr.version}</version>
+    </dependency>
+
+    <!-- Akeyless CloudID lightweight provider -->
+    <dependency>
+      <groupId>io.akeyless</groupId>
+      <artifactId>cloudid-lightweight</artifactId>
+      <version>${akeyless.cloudid.version}</version>
+    </dependency>
+
+    <!-- gson not used in source/tests, remove to keep pom minimal -->
+
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- No direct compile-time dependency on MID jars; code uses reflection -->
+    <!-- Commons Logging is used by MID logging; include as provided so you don’t ship it. -->
+    <dependency>
+      <groupId>commons-logging</groupId>
+      <artifactId>commons-logging</artifactId>
+      <version>${commons.logging.version}</version>
+      <scope>provided</scope>
+    </dependency>
+      
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.10.1</version>
+        <configuration>
+          <source>${maven.compiler.source}</source>
+          <target>${maven.compiler.target}</target>
+        </configuration>
+      </plugin>
+      
+            <!-- any other plugins -->
+            <plugin>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                    <appendAssemblyId>false</appendAssemblyId>
+                </configuration>
+            </plugin>
+    </plugins>
+  </build>
+  <repositories>
+    <repository>
+      <id>akeyless-cloudid</id>
+      <url>https://akeyless.jfrog.io/artifactory/akeyless-cloudid</url>
+    </repository>
+    <repository>
+      <id>akeyless-java</id>
+      <url>https://akeyless.jfrog.io/artifactory/akeyless-java</url>
+    </repository>
+  </repositories>
+  </project>
