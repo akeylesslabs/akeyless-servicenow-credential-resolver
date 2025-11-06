@@ -4,7 +4,6 @@
 
 This project provides a ServiceNow MID external credential resolver that retrieves secrets from Akeyless and maps them to ServiceNow Discovery credential fields. The resolver class is `com.snc.discovery.CredentialResolver`.
 
-These instructions mirror the well-known Vault resolver flow and are adapted for Akeyless. For background and a similar flow, see the HashiCorp guides: [Vault ServiceNow Installation](https://developer.hashicorp.com/vault/docs/platform/servicenow/installation) and [Vault ServiceNow Configuration](https://developer.hashicorp.com/vault/docs/platform/servicenow/configuration).
 
 ### Prerequisites
 
