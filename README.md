@@ -69,6 +69,47 @@ Environment/system property alternatives
 - As a fallback for any `ext.cred.*` property, an environment variable with the uppercased name and dots replaced by underscores is also read (e.g., `EXT_CRED_AKEYLESS_GW_URL`).
 - Precedence: MID properties override environment/system variables.
 
+### Configure MID config.xml (secure local parameters)
+
+Add sensitive Akeyless credentials in the MID’s `config.xml`.
+
+Edit the file on each MID host:
+
+- Linux: `/opt/agent/config.xml`
+- Windows: `C:\ServiceNow\agent\config.xml`
+
+Insert your parameters inside the `<parameters>` block:
+
+```xml
+<parameters>
+    ...
+    <!-- Akeyless secure credentials -->
+    <parameter name="ext.cred.akeyless.gw_url" value="https://api.akeyless.io" />
+    <parameter name="ext.cred.akeyless.access_type" value="access_key" />
+    <parameter name="ext.cred.akeyless.access_id" value="AKEYLESS_ACCESS_ID" />
+    <parameter name="ext.cred.akeyless.access_key" value="AKEYLESS_SECRET_KEY" secure="true" />
+
+    <!-- Optional JSON mapping overrides -->
+    <parameter name="ext.cred.akeyless.map.username" value="username" />
+    <parameter name="ext.cred.akeyless.map.password" value="password" />
+    <parameter name="ext.cred.akeyless.map.private_key" value="private_key" />
+    <parameter name="ext.cred.akeyless.map.passphrase" value="passphrase" />
+</parameters>
+```
+
+Then restart the MID service:
+
+```bash
+sudo service mid restart
+```
+
+Or on Windows (from an elevated Command Prompt):
+
+```bat
+net stop mid
+net start mid
+```
+
 ### Configure a Discovery Credential to use this resolver
 
 1) Create a new credential
