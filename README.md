@@ -205,6 +205,67 @@ will map to ServiceNow `username = alice`, `password = secret`.
 - Logging:
   - Resolver logs go through Commons Logging. Check the MID Server logs for entries containing “Akeyless resolver”.
 
+### CI/CD Pipeline
+
+This project uses GitHub Actions for automated testing and publishing to Maven Central.
+
+#### Setup
+
+**GPG Key**: Published to `keys.openpgp.org` (fingerprint: `2BF78FF1D9D1EB92391F24E8201BDF6FEC105F84`) for Maven artifact signing. Maven Central automatically verifies signatures using the public key from keyservers.
+
+#### Pipeline Behavior
+
+- **Pull Requests**: Runs tests only (no deployment)
+- **Manual Dispatch on Main Branch**: Deploys release version (specify version manually)
+- **Manual Dispatch on Other Branches**: Deploys SNAPSHOT version (`${version}-SNAPSHOT`)
+
+#### Manual Deployment
+
+Deployments only happen when you manually trigger the workflow:
+
+1. Go to GitHub Actions → "CI/CD" workflow → "Run workflow"
+2. Choose branch to deploy from
+3. **Version is required for all deployments** - Enter the base version number
+
+**Deployment behavior:**
+- **Main branch**: Deploys `1.0.0` (if you enter `1.0.0`)
+- **Feature branches**: Deploys `1.0.0-SNAPSHOT` (if you enter `1.0.0`)
+
+#### Versioning Strategy
+
+**Manual versioning with workflow dispatch.** Deployments only happen when manually triggered, giving you full control over versions.
+
+**Version types:**
+- **Snapshots** (`1.0.0-SNAPSHOT`, `1.1.0-SNAPSHOT`, etc.): Development versions that can be overwritten
+- **Releases** (`1.0.0`, `1.0.1`, `1.1.0`, etc.): Permanent versions published to Maven Central
+
+**What are SNAPSHOT versions?**
+- SNAPSHOT versions allow **multiple deployments** of the same version number
+- Useful for testing integrations without committing to a final version
+- Maven Central allows overwriting SNAPSHOT versions, but not release versions
+- Example: `1.0.0-SNAPSHOT` can be deployed multiple times as you develop
+
+**Semantic versioning:**
+- `MAJOR.MINOR.PATCH` (e.g., `1.0.0`, `1.0.1`, `1.1.0`, `2.0.0`)
+- **MAJOR**: Breaking changes
+- **MINOR**: New features, backward compatible
+- **PATCH**: Bug fixes, backward compatible
+
+**How to deploy:**
+
+1. **For release versions** (main branch):
+   - Go to Actions → CI/CD → Run workflow
+   - Select main branch
+   - Enter version: `1.0.0`, `1.0.1`, `1.1.0`, `2.0.0` (deploys exactly as entered)
+
+2. **For snapshot versions** (feature branches):
+   - Go to Actions → CI/CD → Run workflow
+   - Select your feature branch
+   - Enter base version: `1.0.0` → deploys `1.0.0-SNAPSHOT`
+   - Enter base version: `1.1.0` → deploys `1.1.0-SNAPSHOT`
+
+**Why manual?** Maven Central deployments are permanent - manual control prevents accidental version overwrites and gives you time to test before releasing.
+
 ### Local/dev testing (optional)
 
 You can run unit tests locally:
@@ -218,5 +279,3 @@ To quickly sanity-check end-to-end against Akeyless, set environment variables a
 ### License
 
 Apache-2.0
-
-

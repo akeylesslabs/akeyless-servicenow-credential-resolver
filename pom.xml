@@ -3,12 +3,12 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>com.snc</groupId>
+  <groupId>io.akeyless</groupId>
   <artifactId>akeyless-servicenow-credential-resolver</artifactId>
   <version>${revision}</version>
   <name>ServiceNow Credential Resolver (Akeyless)</name>
   <description>ServiceNow MID external credential resolver using Akeyless HTTP API</description>
-  
+
   <licenses>
     <license>
       <name>Apache License, Version 2.0</name>
@@ -26,6 +26,12 @@
         </developer>
     </developers>
 
+  <scm>
+    <connection>scm:git:git://github.com/akeylesslabs/akeyless-servicenow-credential-resolver.git</connection>
+    <developerConnection>scm:git:ssh://github.com/akeylesslabs/akeyless-servicenow-credential-resolver.git</developerConnection>
+    <url>https://github.com/akeylesslabs/akeyless-servicenow-credential-resolver</url>
+  </scm>
+
   <properties>
     <maven.compiler.source>17</maven.compiler.source>
     <maven.compiler.target>17</maven.compiler.target>
@@ -35,6 +41,18 @@
     <commons.logging.version>1.2</commons.logging.version>
     <akeyless.cloudid.version>v0.1.2</akeyless.cloudid.version>
   </properties>
+
+  <distributionManagement>
+    <snapshotRepository>
+      <id>central</id>
+      <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+    </snapshotRepository>
+    <repository>
+      <id>central</id>
+      <url>https://central.sonatype.com/api/v1/publisher/upload</url>
+    </repository>
+  </distributionManagement>
+
 
   <dependencies>
 
@@ -69,7 +87,7 @@
       <version>${commons.logging.version}</version>
       <scope>provided</scope>
     </dependency>
-      
+
   </dependencies>
 
   <build>
@@ -83,7 +101,7 @@
           <target>${maven.compiler.target}</target>
         </configuration>
       </plugin>
-      
+
             <!-- any other plugins -->
             <plugin>
                 <artifactId>maven-assembly-plugin</artifactId>
@@ -102,6 +120,66 @@
                     <appendAssemblyId>false</appendAssemblyId>
                 </configuration>
             </plugin>
+
+            <!-- GPG signing for Maven Central -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>3.0.1</version>
+                <configuration>
+                    <gpgArguments>
+                        <arg>--pinentry-mode</arg>
+                        <arg>loopback</arg>
+                    </gpgArguments>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Maven deploy plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-deploy-plugin</artifactId>
+                <version>3.0.0</version>
+            </plugin>
+
+            <!-- Source plugin for Maven Central -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.2.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Javadoc plugin for Maven Central -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.4.0</version>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
     </plugins>
   </build>
   <repositories>
