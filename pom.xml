@@ -3,12 +3,13 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>com.snc</groupId>
+  <groupId>io.akeyless</groupId>
   <artifactId>akeyless-servicenow-credential-resolver</artifactId>
   <version>${revision}</version>
   <name>ServiceNow Credential Resolver (Akeyless)</name>
   <description>ServiceNow MID external credential resolver using Akeyless HTTP API</description>
-  
+  <url>https://github.com/akeylesslabs/akeyless-servicenow-credential-resolver</url>
+
   <licenses>
     <license>
       <name>Apache License, Version 2.0</name>
@@ -26,6 +27,12 @@
         </developer>
     </developers>
 
+  <scm>
+    <connection>scm:git:git://github.com/akeylesslabs/akeyless-servicenow-credential-resolver.git</connection>
+    <developerConnection>scm:git:ssh://github.com/akeylesslabs/akeyless-servicenow-credential-resolver.git</developerConnection>
+    <url>https://github.com/akeylesslabs/akeyless-servicenow-credential-resolver</url>
+  </scm>
+
   <properties>
     <maven.compiler.source>17</maven.compiler.source>
     <maven.compiler.target>17</maven.compiler.target>
@@ -37,7 +44,6 @@
   </properties>
 
   <dependencies>
-
     <!-- Lightweight JSON: Jackson JR (replaces databind usage) -->
     <dependency>
       <groupId>com.fasterxml.jackson.jr</groupId>
@@ -69,7 +75,7 @@
       <version>${commons.logging.version}</version>
       <scope>provided</scope>
     </dependency>
-      
+
   </dependencies>
 
   <build>
@@ -83,23 +89,116 @@
           <target>${maven.compiler.target}</target>
         </configuration>
       </plugin>
-      
-            <!-- any other plugins -->
+
+      <!-- Flatten plugin to resolve CI-friendly version in deployed POM -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>flatten-maven-plugin</artifactId>
+        <version>1.5.0</version>
+        <configuration>
+          <updatePomFile>true</updatePomFile>
+          <flattenMode>resolveCiFriendliesOnly</flattenMode>
+        </configuration>
+        <executions>
+          <execution>
+            <id>flatten</id>
+            <phase>process-resources</phase>
+            <goals>
+              <goal>flatten</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>flatten.clean</id>
+            <phase>clean</phase>
+            <goals>
+              <goal>clean</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- JAR plugin for Maven Central -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.2.0</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+              <addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+
+
+            <!-- GPG signing for Maven Central -->
             <plugin>
-                <artifactId>maven-assembly-plugin</artifactId>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>3.0.1</version>
                 <executions>
                     <execution>
-                        <phase>package</phase>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
                         <goals>
-                            <goal>single</goal>
+                            <goal>sign</goal>
                         </goals>
                     </execution>
                 </executions>
                 <configuration>
-                    <descriptorRefs>
-                        <descriptorRef>jar-with-dependencies</descriptorRef>
-                    </descriptorRefs>
-                    <appendAssemblyId>false</appendAssemblyId>
+                    <!-- Use environment variable for passphrase -->
+                    <passphrase>${env.GPG_PASSPHRASE}</passphrase>
+                    <passphraseEnvName>GPG_PASSPHRASE</passphraseEnvName>
+                    <gpgArguments>
+                        <arg>--pinentry-mode</arg>
+                        <arg>loopback</arg>
+                    </gpgArguments>
+                    <!-- Sign all attached artifacts -->
+                    <signAllArtifacts>true</signAllArtifacts>
+                </configuration>
+            </plugin>
+            <!-- Source plugin for Maven Central -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.2.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Javadoc plugin for Maven Central -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.4.0</version>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Central Publishing Maven Plugin for Sonatype Central Portal (releases and snapshots) -->
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.7.0</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <publishingServerId>central</publishingServerId>
+                    <tokenAuth>true</tokenAuth>
                 </configuration>
             </plugin>
     </plugins>

@@ -1,0 +1,78 @@
+name: CI
+
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Deploy v{0}', inputs.version) || format('CI Tests - {0}', github.event_name) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g. 1.0.0)'
+        required: true
+        type: string
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+    - name: Run tests
+      run: mvn test -Drevision=1.0.0-TEST
+
+  deploy:
+    needs: test
+    name: Deploy to Maven Central
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+    # Set up GPG for signing artifacts
+    - name: Import GPG key
+      env:
+        GPG_PRIVATE_KEY: ${{ secrets.MAVEN_CENTRAL_GPG_PRIVATE_KEY }}
+        GPG_PASSPHRASE: ${{ secrets.MAVEN_CENTRAL_GPG_PASSPHRASE }}
+      run: |
+        set -eou pipefail
+
+        gpg --batch --import <<< "${GPG_PRIVATE_KEY}"
+        FINGERPRINT=$(gpg --list-keys --with-colons | grep '^fpr' | head -1 | cut -d: -f10)
+        echo "Using GPG key: $FINGERPRINT"
+
+        # Trust the key automatically
+        printf '5\ny\nquit\n' | gpg --batch --pinentry-mode loopback --passphrase-fd 0 --command-fd 0 --edit-key "$FINGERPRINT" trust
+
+        echo "GPG key imported and configured for signing"
+
+    # Determine version based on branch
+    - name: Set version for deployment
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "REVISION=${{ inputs.version }}" >> $GITHUB_ENV
+        else
+          echo "REVISION=${{ inputs.version }}-SNAPSHOT" >> $GITHUB_ENV
+        fi
+
+    # Deploy to Maven Central
+    - name: Publish artifacts
+      run: |
+        mvn clean deploy -Drevision=${REVISION} -DskipTests -s settings.xml
+      env:
+        CENTRAL_USER: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+        CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        GPG_PASSPHRASE: ${{ secrets.MAVEN_CENTRAL_GPG_PASSPHRASE }}
+        GPG_TTY: /dev/null

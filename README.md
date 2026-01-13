@@ -205,12 +205,55 @@ will map to ServiceNow `username = alice`, `password = secret`.
 - Logging:
   - Resolver logs go through Commons Logging. Check the MID Server logs for entries containing “Akeyless resolver”.
 
+### CI/CD Pipeline
+
+This project uses GitHub Actions for automated testing and publishing to Maven Central.
+
+#### Setup
+
+**GPG Key**: Published to `keys.openpgp.org` (fingerprint: `2BF78FF1D9D1EB92391F24E8201BDF6FEC105F84`) for Maven artifact signing. Maven Central automatically verifies signatures using the public key from keyservers.
+
+**Central Portal Authentication**: Uses publishing tokens (not OSSRH username/password) stored as `MAVEN_CENTRAL_USERNAME` and `MAVEN_CENTRAL_PASSWORD` secrets.
+
+#### Pipeline Behavior
+
+- **Pull Requests**: Runs tests only (no deployment)
+- **Manual Dispatch on Main Branch**: Deploys release version to staging (specify version manually, requires manual publish in portal)
+- **Manual Dispatch on Other Branches**: Deploys SNAPSHOT version (`${version}-SNAPSHOT`, auto-publishes if enabled)
+
+#### Manual Deployment
+
+Deployments only happen when you manually trigger the workflow:
+
+1. Go to GitHub Actions → "CI/CD" workflow → "Run workflow"
+2. Choose branch to deploy from
+3. **Version is required for all deployments** - Enter the base version number
+
+**Deployment behavior:**
+- **Main branch**: Deploys `1.0.0` to staging → **Manual publish required** in Maven Central Portal
+- **Feature branches**: Deploys `1.0.0-SNAPSHOT` → **Auto-publishes**
+
+**Version types:**
+- **Snapshots** (`1.0.0-SNAPSHOT`, `1.1.0-SNAPSHOT`): Development versions that can be overwritten multiple times
+- **Releases** (`1.0.0`, `1.0.1`, `1.1.0`): Permanent versions requiring manual publishing
+
+**Semantic versioning:** `MAJOR.MINOR.PATCH`
+- **MAJOR**: Breaking changes
+- **MINOR**: New features, backward compatible
+- **PATCH**: Bug fixes, backward compatible
+
+**Deployment examples:**
+- Enter `1.0.0` on main branch → deploys `1.0.0` (manual publish needed)
+- Enter `1.0.0` on feature branch → deploys `1.0.0-SNAPSHOT` (auto-publishes)
+
+**Why manual for releases?** Maven Central deployments are permanent - manual publishing gives you final control over when releases become public. Snapshots auto-publish for faster development iteration.
+
 ### Local/dev testing (optional)
 
 You can run unit tests locally:
 
 ```bash
-mvn test
+mvn test -Drevision=1.0.0-TEST
 ```
 
 To quickly sanity-check end-to-end against Akeyless, set environment variables and create a Discovery credential that points to a known secret path. For cloud-based auth types, run the MID on a host with a valid cloud identity.
@@ -218,5 +261,3 @@ To quickly sanity-check end-to-end against Akeyless, set environment variables a
 ### License
 
 Apache-2.0
-
-
