@@ -213,6 +213,8 @@ This project uses GitHub Actions for automated testing and publishing to Maven C
 
 **GPG Key**: Published to `keys.openpgp.org` (fingerprint: `2BF78FF1D9D1EB92391F24E8201BDF6FEC105F84`) for Maven artifact signing. Maven Central automatically verifies signatures using the public key from keyservers.
 
+**Central Portal Authentication**: Uses publishing tokens (not OSSRH username/password) stored as `MAVEN_CENTRAL_USERNAME` and `MAVEN_CENTRAL_PASSWORD` secrets.
+
 #### Pipeline Behavior
 
 - **Pull Requests**: Runs tests only (no deployment)
