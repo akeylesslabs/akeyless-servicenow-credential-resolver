@@ -22,7 +22,7 @@ jobs:
         distribution: 'temurin'
         cache: maven
     - name: Run tests
-      run: mvn test
+      run: mvn test -Drevision=1.0.0-TEST
 
   deploy:
     needs: test
