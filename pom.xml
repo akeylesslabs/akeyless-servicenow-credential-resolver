@@ -28,8 +28,8 @@
     </developers>
 
   <scm>
-    <connection>scm:git:git://github.com/akeylesslabs/akeyless-servicenow-credential-resolver.git</connection>
-    <developerConnection>scm:git:ssh://github.com/akeylesslabs/akeyless-servicenow-credential-resolver.git</developerConnection>
+    <connection>scm:git:https://github.com/akeylesslabs/akeyless-servicenow-credential-resolver.git</connection>
+    <developerConnection>scm:git:https://github.com/akeylesslabs/akeyless-servicenow-credential-resolver.git</developerConnection>
     <url>https://github.com/akeylesslabs/akeyless-servicenow-credential-resolver</url>
   </scm>
 
