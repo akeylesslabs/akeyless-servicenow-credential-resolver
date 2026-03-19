@@ -18,6 +18,8 @@ This project provides a ServiceNow MID external credential resolver that retriev
 - `aws_iam`: CloudID from AWS
 - `azure_ad`: CloudID from Azure
 - `gcp`: CloudID from GCP
+- `universal_identity` or `uid`: Access ID + UID token
+- `cert` or `certificate`: Access ID + client certificate and private key
 
 For cloud-based methods, the resolver detects CloudID using the cloud environment. Ensure the MID Server is running where a CloudID can be obtained (e.g., EC2 with an instance profile, Azure VM with a managed identity, GCP VM with default credentials). For local/dev use, prefer `access_key`.
 
@@ -50,9 +52,14 @@ Artifacts:
 Set the following MID properties on your instance (System Properties or MID Properties). Property names are case-sensitive.
 
 - `ext.cred.akeyless.gw_url` (string): Akeyless Gateway. Default: `https://api.akeyless.io`
-- `ext.cred.akeyless.access_type` (string): One of `access_key`, `aws_iam`, `azure_ad`, `gcp`. Default: `access_key`
+- `ext.cred.akeyless.access_type` (string): One of `access_key`, `aws_iam`, `azure_ad`, `gcp`, `universal_identity`/`uid`, `cert`/`certificate`. Default: `access_key`
 - `ext.cred.akeyless.access_id` (string): Your Akeyless Access ID (required)
 - `ext.cred.akeyless.access_key` (string): Your Akeyless Access Key (required for `access_key` only)
+- `ext.cred.akeyless.uid_token` (string): Your Universal Identity token (required for `universal_identity` / `uid`)
+- `ext.cred.akeyless.cert_data` (string): PEM certificate content or Base64-encoded certificate data (required for `cert` / `certificate` unless `cert_file_name` is set)
+- `ext.cred.akeyless.cert_file_name` (string): Path on the MID host to the client certificate file (alternative to `cert_data`)
+- `ext.cred.akeyless.key_data` (string): PEM private key content or Base64-encoded private key data (required for `cert` / `certificate` unless `key_file_name` is set)
+- `ext.cred.akeyless.key_file_name` (string): Path on the MID host to the client private key file (alternative to `key_data`)
 
 Optional field mapping overrides for JSON secrets (see Mapping section below):
 - `ext.cred.akeyless.map.username` (default: `username`)
@@ -66,6 +73,9 @@ Environment/system property alternatives
   - `AKEYLESS_ACCESS_TYPE`
   - `AKEYLESS_ACCESS_ID` (required)
   - `AKEYLESS_ACCESS_KEY` (when using `access_key`)
+  - `AKEYLESS_UID_TOKEN` (when using `universal_identity` / `uid`)
+  - `AKEYLESS_CERT_DATA` or `AKEYLESS_CERT_FILE_NAME` (when using `cert` / `certificate`)
+  - `AKEYLESS_KEY_DATA` or `AKEYLESS_KEY_FILE_NAME` (when using `cert` / `certificate`)
 - As a fallback for any `ext.cred.*` property, an environment variable with the uppercased name and dots replaced by underscores is also read (e.g., `EXT_CRED_AKEYLESS_GW_URL`).
 - Precedence: MID properties override environment/system variables.
 
@@ -88,6 +98,16 @@ Insert your parameters inside the `<parameters>` block:
     <parameter name="ext.cred.akeyless.access_type" value="access_key" />
     <parameter name="ext.cred.akeyless.access_id" value="AKEYLESS_ACCESS_ID" />
     <parameter name="ext.cred.akeyless.access_key" value="AKEYLESS_SECRET_KEY" secure="true" />
+
+    <!-- Universal Identity -->
+    <parameter name="ext.cred.akeyless.uid_token" value="u-XXXXXXXX" secure="true" />
+
+    <!-- Certificate auth: either inline data or file paths on the MID host -->
+    <parameter name="ext.cred.akeyless.cert_file_name" value="/opt/agent/certs/client-cert.pem" />
+    <parameter name="ext.cred.akeyless.key_file_name" value="/opt/agent/certs/client-key.pem" secure="true" />
+    <!-- or -->
+    <parameter name="ext.cred.akeyless.cert_data" value="-----BEGIN CERTIFICATE-----..." secure="true" />
+    <parameter name="ext.cred.akeyless.key_data" value="-----BEGIN PRIVATE KEY-----..." secure="true" />
 
     <!-- Optional JSON mapping overrides -->
     <parameter name="ext.cred.akeyless.map.username" value="username" />
@@ -194,10 +214,28 @@ will map to ServiceNow `username = alice`, `password = secret`.
 - Ensure the MID Server host is running in the target cloud with the appropriate identity, or that cloud SDK environment is present to retrieve a CloudID.
 - Do not set `access_key` when using CloudID-based methods.
 
+### Universal Identity notes
+
+- Set `ext.cred.akeyless.access_type` to `universal_identity` or `uid`.
+- Set `ext.cred.akeyless.access_id` to the Universal Identity auth method Access ID.
+- Set `ext.cred.akeyless.uid_token` (or `AKEYLESS_UID_TOKEN`) to the UID token you generated in Akeyless.
+
+### Certificate auth notes
+
+- Set `ext.cred.akeyless.access_type` to `cert` or `certificate`.
+- Set `ext.cred.akeyless.access_id` to the certificate auth method Access ID.
+- Provide certificate and private key material either inline (`cert_data`, `key_data`) or as file paths on the MID host (`cert_file_name`, `key_file_name`).
+- Inline `cert_data` and `key_data` may be raw PEM text or Base64-encoded content.
+- The resolver sends certificate and key material to the Akeyless auth API using the `cert-data` and `key-data` request fields.
+
 ### Troubleshooting
 
 - HTTP 400 “Missing required parameter - timestamp” on `/auth`:
   - Usually indicates the wrong auth flow or missing parameters. Verify `access_type` is set correctly. For CloudID flows, do not set an `access_key`. For `access_key` flows, ensure both `access_id` and `access_key` are set.
+- “Missing Akeyless UID token”:
+  - Set `ext.cred.akeyless.uid_token` or `AKEYLESS_UID_TOKEN` when using `universal_identity` / `uid`.
+- “Missing Akeyless certificate/private key”:
+  - For `cert` / `certificate`, provide `cert_data`/`key_data` or `cert_file_name`/`key_file_name`, and ensure any referenced files exist on the MID host.
 - HTTP 404 from `/v2/*` endpoints:
   - The resolver automatically falls back to the non-`/v2` endpoints. If both fail, verify the gateway URL and network reachability.
 - “Secret value not found for name …”:

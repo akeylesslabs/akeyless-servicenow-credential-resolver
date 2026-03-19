@@ -3,19 +3,21 @@ package com.snc.discovery;
 import org.junit.Test;
 import org.junit.Assert;
 
-import java.lang.reflect.Method;
 import java.util.Map;
 
 public class CredentialResolverMappingTest {
 
-    @SuppressWarnings("unchecked")
-    private Map<String, String> invokeMapToServiceNow(String type, String raw,
-                                                      String fUser, String fPass, String fPk, String fPhr) throws Exception {
-        CredentialResolver cr = new CredentialResolver();
-        Method m = CredentialResolver.class.getDeclaredMethod("mapToServiceNow",
-                String.class, String.class, String.class, String.class, String.class, String.class);
-        m.setAccessible(true);
-        return (Map<String, String>) m.invoke(cr, type, raw, fUser, fPass, fPk, fPhr);
+    private Map<String, String> invokeMapToServiceNow(
+        String type,
+        String raw,
+        String fUser,
+        String fPass,
+        String fPk,
+        String fPhr
+    ) throws Exception {
+        ServiceNowCredentialMapper mapper = new ServiceNowCredentialMapper();
+        ResolverConfig.MappingConfig cfg = new ResolverConfig.MappingConfig(fUser, fPass, fPk, fPhr);
+        return mapper.mapToServiceNow(type, raw, cfg);
     }
 
     @Test
