@@ -52,7 +52,7 @@ public class CredentialResolverSettingsXmlTest {
         args.put(CredentialResolver.ARG_ID, "/s");
         args.put(CredentialResolver.ARG_TYPE, "ssh_password");
         Map<String, String> out = cr.resolve(args);
-        Assert.assertEquals("pw", out.get("password"));
+        Assert.assertEquals("pw", out.get(CredentialResolver.VAL_PSWD));
     }
 
     @Test
@@ -92,7 +92,7 @@ public class CredentialResolverSettingsXmlTest {
         args.put(CredentialResolver.ARG_ID, "/s2");
         args.put(CredentialResolver.ARG_TYPE, "ssh_password");
         Map<String, String> out = cr.resolve(args);
-        Assert.assertEquals("pw2", out.get("password"));
+        Assert.assertEquals("pw2", out.get(CredentialResolver.VAL_PSWD));
     }
 }
 

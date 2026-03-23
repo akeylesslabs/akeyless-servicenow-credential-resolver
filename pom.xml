@@ -41,6 +41,9 @@
     <jackson.jr.version>2.20.1</jackson.jr.version>
     <commons.logging.version>1.2</commons.logging.version>
     <akeyless.cloudid.version>v0.1.2</akeyless.cloudid.version>
+    <maven.shade.plugin.version>3.6.0</maven.shade.plugin.version>
+    <!-- Default: fat JAR for ServiceNow MID (Jackson + cloudid). Use -Pthin to skip. -->
+    <shade.skip>false</shade.skip>
   </properties>
 
   <dependencies>
@@ -132,6 +135,41 @@
         </configuration>
       </plugin>
 
+      <!-- Bundle Jackson JR + jackson-core + cloudid into one JAR for MID classpath -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>${maven.shade.plugin.version}</version>
+        <executions>
+          <execution>
+            <id>shade-runtime-dependencies</id>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <skip>${shade.skip}</skip>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <artifactSet>
+                <excludes>
+                  <exclude>commons-logging:commons-logging</exclude>
+                  <exclude>junit:junit</exclude>
+                </excludes>
+              </artifactSet>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
 
             <!-- GPG signing for Maven Central -->
             <plugin>
@@ -203,6 +241,16 @@
             </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>thin</id>
+      <properties>
+        <shade.skip>true</shade.skip>
+      </properties>
+    </profile>
+  </profiles>
+
   <repositories>
     <repository>
       <id>akeyless-cloudid</id>

@@ -1,26 +1,25 @@
 package com.snc.discovery;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.jr.ob.JSON;
 import io.akeyless.cloudid.CloudIdProvider;
 import io.akeyless.cloudid.CloudProviderFactory;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.File;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ConcurrentHashMap;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -43,6 +42,16 @@ public class CredentialResolver {
   public static final String VAL_PRIVKEY = "privkey"; // the string privacy key for the credential
 
   private static final JSON JSON_STD = JSON.std;
+
+  /**
+   * Second-pass JSON parse for secrets that embed PEM / certs / SSH keys with raw newlines inside quoted
+   * strings (invalid for strict JSON). Enabled only when {@code -----BEGIN} is present after strict parse fails.
+   */
+  private static final JSON JSON_LENIENT_PEM = JSON.builder(
+      JsonFactory.builder()
+          .enable(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS)
+          .build()
+  ).build();
 
   // -------- Testable HTTP transport seam --------
   interface HttpTransport {
@@ -124,18 +133,24 @@ public class CredentialResolver {
   }
   private String getSecretValue(String secretPath) throws Exception {
     String gwUrl = getMidProp("ext.cred.akeyless.gw_url", envOr("AKEYLESS_GW_URL", "https://api.akeyless.io"));
-    String accessType = getMidProp("ext.cred.akeyless.access_type", envOr("AKEYLESS_ACCESS_TYPE", "access_key"));
+    String accessTypeRaw = getMidProp("ext.cred.akeyless.access_type", envOr("AKEYLESS_ACCESS_TYPE", "access_key"));
+    String accessType = normalizeAccessType(accessTypeRaw);
     String accessId = must(getMidProp("ext.cred.akeyless.access_id", envOr("AKEYLESS_ACCESS_ID", null)),
             "Missing Akeyless access id: set MID 'ext.cred.akeyless.access_id' or env 'AKEYLESS_ACCESS_ID'");
     String accessKey = getMidProp("ext.cred.akeyless.access_key", envOr("AKEYLESS_ACCESS_KEY", null));
-
+    String uidToken = getMidProp("ext.cred.akeyless.uid_token", envOr("AKEYLESS_UID_TOKEN", null));
+    String certData = getMidProp("ext.cred.akeyless.cert_data", envOr("AKEYLESS_CERT_DATA", null));
+    String keyData = getMidProp("ext.cred.akeyless.key_data", envOr("AKEYLESS_KEY_DATA", null));
+    String certFileName = getMidProp("ext.cred.akeyless.cert_file_name", envOr("AKEYLESS_CERT_FILE_NAME", null));
+    String keyFileName = getMidProp("ext.cred.akeyless.key_file_name", envOr("AKEYLESS_KEY_FILE_NAME", null));
     // --- Auth
     Map<String, Object> authReq = new HashMap<>();
     switch (accessType) {
       case "access_key":
         authReq.put("access-type", "access_key");
         authReq.put("access-id", accessId);
-        authReq.put("access-key", accessKey);
+        authReq.put("access-key", must(accessKey,
+            "Missing Akeyless access key: set MID 'ext.cred.akeyless.access_key' or env 'AKEYLESS_ACCESS_KEY'"));
         break;
       case "aws_iam":
         authReq.put("access-type", "aws_iam");
@@ -149,8 +164,33 @@ public class CredentialResolver {
         authReq.put("access-type", "gcp");
         authReq.put("access-id", accessId);
         break;
+      case "universal_identity":
+        authReq.put("access-type", "universal_identity");
+        authReq.put("access-id", accessId);
+        authReq.put("uid-token", must(uidToken,
+            "Missing Akeyless UID token: set MID 'ext.cred.akeyless.uid_token' or env 'AKEYLESS_UID_TOKEN'"));
+        break;
+      case "cert":
+        authReq.put("access-type", "cert");
+        authReq.put("access-id", accessId);
+        authReq.put("cert-data", base64(resolvePemMaterial(
+            "certificate",
+            certData,
+            certFileName,
+            "ext.cred.akeyless.cert_data",
+            "ext.cred.akeyless.cert_file_name"
+        )));
+        authReq.put("key-data", base64(resolvePemMaterial(
+            "private key",
+            keyData,
+            keyFileName,
+            "ext.cred.akeyless.key_data",
+            "ext.cred.akeyless.key_file_name"
+        )));
+        break;
       default:
-        throw new IllegalArgumentException("Unsupported access type '" + accessType + "'. Supported: access_key, aws_iam, azure_ad, gcp");
+        throw new IllegalArgumentException("Unsupported access type '" + accessTypeRaw
+            + "'. Supported: access_key, aws_iam, azure_ad, gcp, universal_identity (uid), cert (certificate)");
     } 
     if (isCloudIdType(accessType)) {
       CloudIdProvider provider = getCloudIdProvider((String) authReq.get("access-type"));
@@ -212,6 +252,47 @@ public class CredentialResolver {
     return v == null || v.isEmpty() ? dflt : v;
   }
 
+  private static String normalizeAccessType(String raw) {
+    if (raw == null) {
+      return "access_key";
+    }
+    String v = raw.trim().toLowerCase();
+    if ("uid".equals(v)) {
+      return "universal_identity";
+    }
+    if ("certificate".equals(v)) {
+      return "cert";
+    }
+    return v;
+  }
+
+  private static byte[] resolvePemMaterial(
+      String materialName,
+      String inlineData,
+      String fileName,
+      String inlinePropName,
+      String filePropName
+  ) {
+    if (inlineData != null && !inlineData.isEmpty()) {
+      return inlineData.getBytes(StandardCharsets.UTF_8);
+    }
+    if (fileName != null && !fileName.isEmpty()) {
+      try {
+        return Files.readAllBytes(Path.of(fileName));
+      } catch (IOException e) {
+        throw new IllegalArgumentException("Unable to read " + materialName + " file '" + fileName + "'", e);
+      }
+    }
+    throw new IllegalArgumentException("Missing Akeyless " + materialName + " material: set MID '"
+        + inlinePropName + "'/'" + filePropName + "' or env '"
+        + inlinePropName.replace('.', '_').toUpperCase() + "'/'"
+        + filePropName.replace('.', '_').toUpperCase() + "'");
+  }
+
+  private static String base64(byte[] data) {
+    return Base64.getEncoder().encodeToString(data);
+  }
+
   private static String joinUrl(String base, String path) {
     if (base == null || base.isEmpty()) return path;
     boolean bSlash = base.endsWith("/");
@@ -237,7 +318,7 @@ public class CredentialResolver {
     Object parsed = tryParseJson(raw);
     if (!(parsed instanceof Map)) {
       // Treat raw value as a single secret (password/token)
-      out.put("password", raw);
+      out.put(VAL_PSWD, raw);
       return out;
     }
     @SuppressWarnings("unchecked")
@@ -252,30 +333,35 @@ public class CredentialResolver {
       case "vmware":
       case "jdbc":
       case "jms":
-        putIf(out, "username", node, fUser);
-        putIf(out, "password", node, fPass);
+        putIf(out, VAL_USER, node, fUser);
+        putIf(out, VAL_PSWD, node, fPass);
         break;
 
       case "ssh_private_key":
-        putIf(out, "username",    node, fUser);
-        putIf(out, "private_key", node, fPk);
-        putIf(out, "passphrase",  node, fPhr);
+      case "sn_cfg_ansible": 
+	  case "sn_disco_certmgmt_certificate_ca":
+	  case "cfg_chef_credentials":
+	  case "infoblox": 
+      case "api_key":
+        putIf(out, VAL_USER, node, fUser);
+        putIf(out, VAL_PKEY, node, fPk);
+        putIf(out, VAL_PASSPHRASE, node, fPhr);
         break;
 
       case "snmpv3":
         // Example JSON:
         // {"username":"u","auth_protocol":"SHA","auth_key":"...","privacy_protocol":"AES","privacy_key":"..."}
-        putIf(out, "username",         node, fUser);
-        putIf(out, "auth-protocol",    node, "auth_protocol");
-        putIf(out, "auth-key",         node, "auth_key");
-        putIf(out, "privacy-protocol", node, "privacy_protocol");
-        putIf(out, "privacy-key",      node, "privacy_key");
+        putIf(out, VAL_USER,         node, fUser);
+        putIf(out, VAL_AUTHPROTO,    node, "auth_protocol");
+        putIf(out, VAL_AUTHKEY,      node, "auth_key");
+        putIf(out, VAL_PRIVPROTO,    node, "privacy_protocol");
+        putIf(out, VAL_PRIVKEY,      node, "privacy_key");
         break;
 
       default:
         // Best effort for custom credential types: username/password if present
-        putIf(out, "username", node, fUser);
-        putIf(out, "password", node, fPass);
+        putIf(out, VAL_USER, node, fUser);
+        putIf(out, VAL_PSWD, node, fPass);
     }
     return out;
   }
@@ -285,9 +371,42 @@ public class CredentialResolver {
     if (v != null) out.put(snField, asString(v));
   }
 
-  private static Object tryParseJson(String raw)  {
-    try { return JSON_STD.anyFrom(raw); }
-    catch (Exception ignore) { return null; }
+  /**
+   * Parse JSON text. If strict parsing fails and the text looks like it contains PEM/certificate material,
+   * retry with a lenient factory that allows unescaped control characters inside strings.
+   */
+  private static Object tryParseJson(String raw) {
+    if (raw == null) {
+      return null;
+    }
+    String trimmed = raw.trim();
+    if (trimmed.startsWith("\uFEFF")) {
+      trimmed = trimmed.substring(1).trim();
+    }
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    Object strict = parseJsonWith(JSON_STD, trimmed);
+    if (strict != null) {
+      return strict;
+    }
+    if (containsPemOrCertificateMarker(trimmed)) {
+      return parseJsonWith(JSON_LENIENT_PEM, trimmed);
+    }
+    return null;
+  }
+
+  private static boolean containsPemOrCertificateMarker(String s) {
+    return s.indexOf("-----BEGIN") >= 0;
+  }
+
+  private static Object parseJsonWith(JSON json, String raw) {
+    byte[] utf8 = raw.getBytes(StandardCharsets.UTF_8);
+    try (InputStream in = new ByteArrayInputStream(utf8)) {
+      return json.anyFrom(in);
+    } catch (Exception e) {
+      return null;
+    }
   }
 
   private static boolean isContainer(Object v) {
@@ -346,13 +465,14 @@ private static String getMidProp(String name, String dflt) {
 
   public static void main(String[] args) throws Exception {
     setPropIfMissing("AKEYLESS_GW_URL", "https://api.akeyless.io");
-    setPropIfMissing("AKEYLESS_ACCESS_TYPE", "aws_iam");
-    setPropIfMissing("AKEYLESS_ACCESS_ID", "p-gjtlpxwh40y8"/* "p-udmwluop9b50"*/);
-    //setPropIfMissing("AKEYLESS_ACCESS_KEY", "zZ4UMVAJzRPOorpa9JbKOglpW8CbYik+YPRcM8mH/Zc=");
-
+    setPropIfMissing("AKEYLESS_ACCESS_TYPE", "universal_identity");
+    setPropIfMissing("AKEYLESS_ACCESS_ID", "p-qwj5c3lzu2nh");
+    setPropIfMissing("AKEYLESS_UID_TOKEN", "u-AQAAAOgDAAD0+6RiuvPVbzVbhPfPK1aDYx3Sa4ujuqUucXdqNWMzbHp1Mm5o");
+    
     CredentialResolver cr = new CredentialResolver();
     HashMap<String, String> input = new HashMap<>();
-    input.put(CredentialResolver.ARG_ID, "/aaa");
+    input.put(CredentialResolver.ARG_ID, "Alexey-SSH-Pass");
+    //input.put(CredentialResolver.ARG_TYPE, "ssh_private_key");
     input.put(CredentialResolver.ARG_TYPE, "ssh_password");
     Map<String, String> result = cr.resolve(input);
     System.out.println(result);

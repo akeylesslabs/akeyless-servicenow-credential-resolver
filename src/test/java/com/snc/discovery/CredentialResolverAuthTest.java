@@ -6,6 +6,10 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -50,6 +54,11 @@ public class CredentialResolverAuthTest {
         System.clearProperty("ext.cred.akeyless.access_type");
         System.clearProperty("ext.cred.akeyless.access_id");
         System.clearProperty("ext.cred.akeyless.access_key");
+        System.clearProperty("ext.cred.akeyless.uid_token");
+        System.clearProperty("ext.cred.akeyless.cert_data");
+        System.clearProperty("ext.cred.akeyless.key_data");
+        System.clearProperty("ext.cred.akeyless.cert_file_name");
+        System.clearProperty("ext.cred.akeyless.key_file_name");
     }
 
     @Test
@@ -67,7 +76,7 @@ public class CredentialResolverAuthTest {
         args.put(CredentialResolver.ARG_TYPE, "ssh_password");
         Map<String, String> out = cr.resolve(args);
 
-        Assert.assertEquals("pw123", out.get("password"));
+        Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
         Assert.assertNotNull(http.lastAuthPayload);
         Assert.assertEquals("access_key", http.lastAuthPayload.get("access-type"));
         Assert.assertEquals("id1", http.lastAuthPayload.get("access-id"));
@@ -96,12 +105,118 @@ public class CredentialResolverAuthTest {
         args.put(CredentialResolver.ARG_TYPE, "ssh_password");
         Map<String, String> out = cr.resolve(args);
 
-        Assert.assertEquals("pw123", out.get("password"));
+        Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
         Assert.assertNotNull(http.lastAuthPayload);
         Assert.assertEquals("aws_iam", http.lastAuthPayload.get("access-type"));
         Assert.assertEquals("id2", http.lastAuthPayload.get("access-id"));
         Assert.assertEquals("CLOUD-ID", http.lastAuthPayload.get("cloud-id"));
         Assert.assertFalse(http.lastAuthPayload.containsKey("access-key"));
+    }
+
+    @Test
+    public void testUidAliasAuthFlowUsesUidToken() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduid");
+        System.setProperty("ext.cred.akeyless.uid_token", "uid-token-123");
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/suid");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        Map<String, String> out = cr.resolve(args);
+
+        Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
+        Assert.assertEquals("universal_identity", http.lastAuthPayload.get("access-type"));
+        Assert.assertEquals("iduid", http.lastAuthPayload.get("access-id"));
+        Assert.assertEquals("uid-token-123", http.lastAuthPayload.get("uid-token"));
+    }
+
+    @Test
+    public void testCertificateAliasUsesInlineMaterial() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "certificate");
+        System.setProperty("ext.cred.akeyless.access_id", "idcert");
+        System.setProperty("ext.cred.akeyless.cert_data", "CERT-DATA");
+        System.setProperty("ext.cred.akeyless.key_data", "KEY-DATA");
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/scert");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        Map<String, String> out = cr.resolve(args);
+
+        Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
+        Assert.assertEquals("cert", http.lastAuthPayload.get("access-type"));
+        Assert.assertEquals("idcert", http.lastAuthPayload.get("access-id"));
+        Assert.assertEquals(
+            Base64.getEncoder().encodeToString("CERT-DATA".getBytes(StandardCharsets.UTF_8)),
+            http.lastAuthPayload.get("cert-data")
+        );
+        Assert.assertEquals(
+            Base64.getEncoder().encodeToString("KEY-DATA".getBytes(StandardCharsets.UTF_8)),
+            http.lastAuthPayload.get("key-data")
+        );
+    }
+
+    @Test
+    public void testCertAuthReadsMaterialFromFiles() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "cert");
+        System.setProperty("ext.cred.akeyless.access_id", "idcertfile");
+        Path certPath = Files.createTempFile("akeyless-cert", ".pem");
+        Path keyPath = Files.createTempFile("akeyless-key", ".pem");
+        Files.write(certPath, "CERT-FILE-DATA".getBytes(StandardCharsets.UTF_8));
+        Files.write(keyPath, "KEY-FILE-DATA".getBytes(StandardCharsets.UTF_8));
+        System.setProperty("ext.cred.akeyless.cert_file_name", certPath.toString());
+        System.setProperty("ext.cred.akeyless.key_file_name", keyPath.toString());
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/scertfile");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        Map<String, String> out = cr.resolve(args);
+
+        Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
+        Assert.assertEquals("cert", http.lastAuthPayload.get("access-type"));
+        Assert.assertEquals(
+            Base64.getEncoder().encodeToString(Files.readAllBytes(certPath)),
+            http.lastAuthPayload.get("cert-data")
+        );
+        Assert.assertEquals(
+            Base64.getEncoder().encodeToString(Files.readAllBytes(keyPath)),
+            http.lastAuthPayload.get("key-data")
+        );
+
+        Files.deleteIfExists(certPath);
+        Files.deleteIfExists(keyPath);
+    }
+
+    @Test
+    public void testCertAuthWithoutMaterialThrows() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "cert");
+        System.setProperty("ext.cred.akeyless.access_id", "idmissing");
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/smissing");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+
+        try {
+            cr.resolve(args);
+            Assert.fail("Expected IllegalArgumentException for missing certificate material");
+        } catch (IllegalArgumentException expected) {
+            Assert.assertTrue(expected.getMessage().contains("Missing Akeyless certificate material"));
+        }
     }
 
     @Test

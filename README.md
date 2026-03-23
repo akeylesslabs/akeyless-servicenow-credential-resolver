@@ -18,6 +18,8 @@ This project provides a ServiceNow MID external credential resolver that retriev
 - `aws_iam`: CloudID from AWS
 - `azure_ad`: CloudID from Azure
 - `gcp`: CloudID from GCP
+- `universal_identity` (or alias `uid`): Access ID + UID token
+- `cert` (or alias `certificate`): Access ID + client certificate/private key material
 
 For cloud-based methods, the resolver detects CloudID using the cloud environment. Ensure the MID Server is running where a CloudID can be obtained (e.g., EC2 with an instance profile, Azure VM with a managed identity, GCP VM with default credentials). For local/dev use, prefer `access_key`.
 
@@ -29,9 +31,12 @@ This is a Maven project. Build a versioned JAR so the filename is stable in MID:
 mvn -Drevision=1.0.0 clean package
 ```
 
+The default build runs **Maven Shade** so the main JAR includes **Jackson JR** (`jackson-jr-objects`, `jackson-core`) and **cloudid-lightweight** (required on the MID). For a thin JAR only: `mvn -Pthin -Drevision=1.0.0 clean package`.
+
 Artifacts:
 - With `-Drevision=1.0.0`: `target/akeyless-servicenow-credential-resolver-1.0.0.jar`
 - Without a revision property, Maven will produce `akeyless-servicenow-credential-resolver-null.jar`.
+- The file in `target/` is the shaded artifact; `target/original-*.jar` is the pre-shade JAR.
 
 ### Install the resolver on the MID Server
 
@@ -50,9 +55,14 @@ Artifacts:
 Set the following MID properties on your instance (System Properties or MID Properties). Property names are case-sensitive.
 
 - `ext.cred.akeyless.gw_url` (string): Akeyless Gateway. Default: `https://api.akeyless.io`
-- `ext.cred.akeyless.access_type` (string): One of `access_key`, `aws_iam`, `azure_ad`, `gcp`. Default: `access_key`
+- `ext.cred.akeyless.access_type` (string): One of `access_key`, `aws_iam`, `azure_ad`, `gcp`, `universal_identity`/`uid`, `cert`/`certificate`. Default: `access_key`
 - `ext.cred.akeyless.access_id` (string): Your Akeyless Access ID (required)
 - `ext.cred.akeyless.access_key` (string): Your Akeyless Access Key (required for `access_key` only)
+- `ext.cred.akeyless.uid_token` (string): Required for `universal_identity` / `uid`
+- `ext.cred.akeyless.cert_data` (string): Inline certificate PEM/text for `cert` auth
+- `ext.cred.akeyless.key_data` (string): Inline private key PEM/text for `cert` auth
+- `ext.cred.akeyless.cert_file_name` (string): File path to certificate PEM on MID host (alternative to `cert_data`)
+- `ext.cred.akeyless.key_file_name` (string): File path to private key PEM on MID host (alternative to `key_data`)
 
 Optional field mapping overrides for JSON secrets (see Mapping section below):
 - `ext.cred.akeyless.map.username` (default: `username`)
@@ -66,6 +76,9 @@ Environment/system property alternatives
   - `AKEYLESS_ACCESS_TYPE`
   - `AKEYLESS_ACCESS_ID` (required)
   - `AKEYLESS_ACCESS_KEY` (when using `access_key`)
+  - `AKEYLESS_UID_TOKEN` (when using `universal_identity`/`uid`)
+  - `AKEYLESS_CERT_DATA` / `AKEYLESS_KEY_DATA` (inline cert auth)
+  - `AKEYLESS_CERT_FILE_NAME` / `AKEYLESS_KEY_FILE_NAME` (file-based cert auth)
 - As a fallback for any `ext.cred.*` property, an environment variable with the uppercased name and dots replaced by underscores is also read (e.g., `EXT_CRED_AKEYLESS_GW_URL`).
 - Precedence: MID properties override environment/system variables.
 
@@ -88,6 +101,16 @@ Insert your parameters inside the `<parameters>` block:
     <parameter name="ext.cred.akeyless.access_type" value="access_key" />
     <parameter name="ext.cred.akeyless.access_id" value="AKEYLESS_ACCESS_ID" />
     <parameter name="ext.cred.akeyless.access_key" value="AKEYLESS_SECRET_KEY" secure="true" />
+    <!-- Universal Identity example -->
+    <!-- <parameter name="ext.cred.akeyless.access_type" value="uid" /> -->
+    <!-- <parameter name="ext.cred.akeyless.uid_token" value="UID_TOKEN" secure="true" /> -->
+    <!-- Certificate auth (inline) -->
+    <!-- <parameter name="ext.cred.akeyless.access_type" value="certificate" /> -->
+    <!-- <parameter name="ext.cred.akeyless.cert_data" value="-----BEGIN CERTIFICATE-----...-----END CERTIFICATE-----" secure="true" /> -->
+    <!-- <parameter name="ext.cred.akeyless.key_data" value="-----BEGIN PRIVATE KEY-----...-----END PRIVATE KEY-----" secure="true" /> -->
+    <!-- Certificate auth (file-based on MID host) -->
+    <!-- <parameter name="ext.cred.akeyless.cert_file_name" value="/opt/agent/certs/client.crt" /> -->
+    <!-- <parameter name="ext.cred.akeyless.key_file_name" value="/opt/agent/certs/client.key" secure="true" /> -->
 
     <!-- Optional JSON mapping overrides -->
     <parameter name="ext.cred.akeyless.map.username" value="username" />
@@ -197,11 +220,13 @@ will map to ServiceNow `username = alice`, `password = secret`.
 ### Troubleshooting
 
 - HTTP 400 “Missing required parameter - timestamp” on `/auth`:
-  - Usually indicates the wrong auth flow or missing parameters. Verify `access_type` is set correctly. For CloudID flows, do not set an `access_key`. For `access_key` flows, ensure both `access_id` and `access_key` are set.
+  - Usually indicates the wrong auth flow or missing parameters. Verify `access_type` is set correctly. For CloudID flows, do not set an `access_key`. For `access_key` flows, ensure both `access_id` and `access_key` are set. For `uid`, ensure `uid_token` is set. For `cert`, provide cert/key material (inline or file-based).
 - HTTP 404 from `/v2/*` endpoints:
   - The resolver automatically falls back to the non-`/v2` endpoints. If both fail, verify the gateway URL and network reachability.
 - “Secret value not found for name …”:
   - Confirm the Credential ID (secret path) is correct and the Akeyless identity has permission to read it.
+- JSON secret looks correct but everything lands in **`pswd`** (one blob):
+  - Often the secret is **not valid strict JSON** because a PEM/certificate/SSH key was pasted with **real line breaks inside the quotes**. Prefer storing JSON with `\n` inside the string. If the payload still contains `-----BEGIN`, the resolver **retries** parsing with a lenient Jackson mode that allows unescaped control characters inside quoted strings.
 - Logging:
   - Resolver logs go through Commons Logging. Check the MID Server logs for entries containing “Akeyless resolver”.
 
