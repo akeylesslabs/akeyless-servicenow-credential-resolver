@@ -594,7 +594,7 @@ private static String getMidProp(String name, String dflt) {
     setPropIfMissing("AKEYLESS_GW_URL", "http://localhost:8080");
     setPropIfMissing("AKEYLESS_ACCESS_TYPE", "universal_identity");
     setPropIfMissing("AKEYLESS_ACCESS_ID", "p-qwj5c3lzu2nh");
-    setPropIfMissing("AKEYLESS_UID_TOKEN", "u-AQAAAOgDAADyAR2vjhuBAyFKN132U5PJcGDwwf+aOOkucXdqNWMzbHp1Mm5o");
+    setPropIfMissing("AKEYLESS_UID_TOKEN", "");
     
     CredentialResolver cr = new CredentialResolver();
     HashMap<String, String> input = new HashMap<>();
