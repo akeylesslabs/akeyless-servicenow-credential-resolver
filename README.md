@@ -63,6 +63,7 @@ Set the following MID properties on your instance (System Properties or MID Prop
 - `ext.cred.akeyless.key_data` (string): Inline private key PEM/text for `cert` auth
 - `ext.cred.akeyless.cert_file_name` (string): File path to certificate PEM on MID host (alternative to `cert_data`)
 - `ext.cred.akeyless.key_file_name` (string): File path to private key PEM on MID host (alternative to `key_data`)
+- `ext.cred.akeyless.ignore_cache` (boolean string `true|false`): For Rotated Secrets only, pass `ignore-cache` to Akeyless when fetching a rotated value. Default: `false`
 
 Optional field mapping overrides for JSON secrets (see Mapping section below):
 - `ext.cred.akeyless.map.username` (default: `username`)
@@ -151,6 +152,14 @@ The resolver accepts either:
 - A plain string secret → mapped as a password/token
 - A JSON object → fields are mapped to ServiceNow credential fields as per the credential Type
 
+Item types (Static / Rotated / Dynamic)
+- The resolver first calls `describe-item` to determine the Akeyless `item_type`.
+- Based on `item_type`, it then calls:
+  - `STATIC_SECRET` → `get-secret-value`
+  - `ROTATED_SECRET` → `get-rotated-secret-value` (also sends `ignore-cache` when `ext.cred.akeyless.ignore_cache=true`)
+  - `DYNAMIC_SECRET` → `get-dynamic-secret-value`
+- If ServiceNow provides an `ip` argument for the credential test/run, the resolver passes it as `host` when fetching rotated secrets (some rotated secrets are host-scoped).
+
 Default mapping (can be overridden via `ext.cred.akeyless.map.*`):
 - Username field: `username`
 - Password field: `password`
@@ -160,7 +169,7 @@ Default mapping (can be overridden via `ext.cred.akeyless.map.*`):
 Per-Type mapping summary
 - Windows, Basic, SSH Password, VMware, JDBC, JMS:
   - Uses JSON fields: `username`, `password` (or your overridden names)
-- SSH Private Key:
+- SSH Private Key (and key-style credential types like `sn_cfg_ansible`, `sn_disco_certmgmt_certificate_ca`, `cfg_chef_credentials`, `infoblox`, `api_key`):
   - Uses JSON fields: `username`, `private_key`, `passphrase`
 - SNMPv3:
   - Uses JSON fields: `username`, `auth_protocol`, `auth_key`, `privacy_protocol`, `privacy_key`

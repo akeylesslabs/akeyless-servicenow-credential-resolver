@@ -112,6 +112,7 @@ public class CredentialResolver {
     // --- 1) Inputs from SN
     final String snType = must(args.get(ARG_TYPE), "Missing arg 'type'");
     final String secretPath = must(args.get(ARG_ID), "Missing arg 'id' (use your Akeyless secret path)");
+    final String host = args.get(ARG_IP);
 
     // --- 2) MID properties (all set from the ServiceNow UI)
     // Optional mapping overrides
@@ -123,7 +124,7 @@ public class CredentialResolver {
   
 
     // --- 4) Fetch value
-    String raw = getSecretValue(secretPath); // String or JSON (for dynamic/structured secrets)
+    String raw = getSecretValue(secretPath, host); // String or JSON (for dynamic/structured secrets)
 
     // --- 5) Map to SN credential fields
     Map<String,String> out = mapToServiceNow(snType, raw, fUser, fPass, fPk, fPhr);
@@ -131,8 +132,36 @@ public class CredentialResolver {
     LOG.info("Akeyless resolver: resolved secret for path '" + secretPath + "' -> fields " + out.keySet());
     return out;
   }
-  private String getSecretValue(String secretPath) throws Exception {
+  private static final String ITEM_TYPE_STATIC = "STATIC_SECRET";
+  private static final String ITEM_TYPE_ROTATED = "ROTATED_SECRET";
+  private static final String ITEM_TYPE_DYNAMIC = "DYNAMIC_SECRET";
+
+  /**
+   * Auth, describe-item, then fetch secret payload as a string (plain or JSON) for {@link #mapToServiceNow}.
+   */
+  private String getSecretValue(String secretPath, String host) throws Exception {
     String gwUrl = getMidProp("ext.cred.akeyless.gw_url", envOr("AKEYLESS_GW_URL", "https://api.akeyless.io"));
+    String token = authenticateAkeyless(gwUrl);
+    String itemType = describeItemType(gwUrl, token, secretPath);
+    String normalizedType = itemType == null ? "" : itemType.trim();
+    if (itemTypeEquals(normalizedType, ITEM_TYPE_STATIC)) {
+      return getStaticSecretPayload(gwUrl, token, secretPath);
+    }
+    if (itemTypeEquals(normalizedType, ITEM_TYPE_ROTATED)) {
+      return getRotatedSecretPayload(gwUrl, token, secretPath, host);
+    }
+    if (itemTypeEquals(normalizedType, ITEM_TYPE_DYNAMIC)) {
+      return getDynamicSecretPayload(gwUrl, token, secretPath);
+    }
+    throw new AkeylessCredentialResolverException(
+        "Unsupported Akeyless item_type '" + itemType + "' for name: " + secretPath);
+  }
+
+  private static boolean itemTypeEquals(String actual, String expected) {
+    return expected.equalsIgnoreCase(actual);
+  }
+
+  private String authenticateAkeyless(String gwUrl) throws Exception {
     String accessTypeRaw = getMidProp("ext.cred.akeyless.access_type", envOr("AKEYLESS_ACCESS_TYPE", "access_key"));
     String accessType = normalizeAccessType(accessTypeRaw);
     String accessId = must(getMidProp("ext.cred.akeyless.access_id", envOr("AKEYLESS_ACCESS_ID", null)),
@@ -143,7 +172,6 @@ public class CredentialResolver {
     String keyData = getMidProp("ext.cred.akeyless.key_data", envOr("AKEYLESS_KEY_DATA", null));
     String certFileName = getMidProp("ext.cred.akeyless.cert_file_name", envOr("AKEYLESS_CERT_FILE_NAME", null));
     String keyFileName = getMidProp("ext.cred.akeyless.key_file_name", envOr("AKEYLESS_KEY_FILE_NAME", null));
-    // --- Auth
     Map<String, Object> authReq = new HashMap<>();
     switch (accessType) {
       case "access_key":
@@ -171,7 +199,7 @@ public class CredentialResolver {
             "Missing Akeyless UID token: set MID 'ext.cred.akeyless.uid_token' or env 'AKEYLESS_UID_TOKEN'"));
         break;
       case "cert":
-        authReq.put("access-type", "cert");
+        authReq.put("access-type", "certificate");
         authReq.put("access-id", accessId);
         authReq.put("cert-data", base64(resolvePemMaterial(
             "certificate",
@@ -191,7 +219,7 @@ public class CredentialResolver {
       default:
         throw new IllegalArgumentException("Unsupported access type '" + accessTypeRaw
             + "'. Supported: access_key, aws_iam, azure_ad, gcp, universal_identity (uid), cert (certificate)");
-    } 
+    }
     if (isCloudIdType(accessType)) {
       CloudIdProvider provider = getCloudIdProvider((String) authReq.get("access-type"));
       String cloudId = provider.getCloudId();
@@ -213,8 +241,39 @@ public class CredentialResolver {
     if (token == null || token.isEmpty()) {
       throw new AkeylessCredentialResolverException("Akeyless auth returned empty token");
     }
+    return token;
+  }
 
-    // --- Get secret value
+  private String describeItemType(String gwUrl, String token, String secretPath) throws Exception {
+    Map<String, Object> req = new HashMap<>();
+    req.put("token", token);
+    req.put("name", secretPath);
+    req.put("accessibility", "regular");
+    req.put("bastion-details", false);
+    req.put("der-certificate-format", false);
+    req.put("gateway-details", false);
+    req.put("item-custom-fields-details", false);
+    req.put("json", false);
+    req.put("services-details", false);
+    req.put("show-versions", false);
+    Map<String, Object> resp;
+    try {
+      resp = httpPostJson(joinUrl(gwUrl, "/v2/describe-item"), req);
+    } catch (AkeylessCredentialResolverException e) {
+      if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) {
+        resp = httpPostJson(joinUrl(gwUrl, "/describe-item"), req);
+      } else {
+        throw e;
+      }
+    }
+    String itemType = asString(resp.get("item_type"));
+    if (itemType == null || itemType.isEmpty()) {
+      throw new AkeylessCredentialResolverException("describe-item returned no item_type for name: " + secretPath);
+    }
+    return itemType;
+  }
+
+  private String getStaticSecretPayload(String gwUrl, String token, String secretPath) throws Exception {
     Map<String, Object> gsvReq = new HashMap<>();
     gsvReq.put("token", token);
     gsvReq.put("name", secretPath);
@@ -238,6 +297,74 @@ public class CredentialResolver {
     }
     if (value == null) {
       throw new AkeylessCredentialResolverException("Secret value not found for name: " + secretPath);
+    }
+    if (isContainer(value)) {
+      return JSON_STD.asString(value);
+    }
+    String v = asString(value);
+    return v != null ? v : "";
+  }
+
+  private String getDynamicSecretPayload(String gwUrl, String token, String secretPath) throws Exception {
+    Map<String, Object> dsvReq = new HashMap<>();
+    dsvReq.put("token", token);
+    dsvReq.put("name", secretPath);
+    dsvReq.put("json", true);
+    dsvReq.put("timeout", 15);
+    Map<String, Object> dsvResp;
+    try {
+      dsvResp = httpPostJson(joinUrl(gwUrl, "/v2/get-dynamic-secret-value"), dsvReq);
+    } catch (AkeylessCredentialResolverException e) {
+      if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) {
+        dsvResp = httpPostJson(joinUrl(gwUrl, "/get-dynamic-secret-value"), dsvReq);
+      } else {
+        throw e;
+      }
+    }
+    Map<String, Object> norm = new HashMap<>(dsvResp);
+    if (norm.containsKey("user") && !norm.containsKey("username")) {
+      norm.put("username", norm.get("user"));
+    }
+    return JSON_STD.asString(norm);
+  }
+
+  private String getRotatedSecretPayload(String gwUrl, String token, String secretPath, String host) throws Exception {
+    Map<String, Object> req = new HashMap<>();
+    req.put("token", token);
+    // API variants: some use "name", others use "names" (string)
+    req.put("name", secretPath);
+    req.put("names", secretPath);
+    req.put("json", true);
+    req.put("ignore-cache", getMidProp("ext.cred.akeyless.ignore_cache", "false"));
+    if (host != null && !host.isEmpty()) {
+      req.put("host", host);
+    }
+
+    Map<String, Object> resp;
+    try {
+      resp = httpPostJson(joinUrl(gwUrl, "/v2/get-rotated-secret-value"), req);
+    } catch (AkeylessCredentialResolverException e) {
+      if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) {
+        try {
+          resp = httpPostJson(joinUrl(gwUrl, "/get-rotated-secret-value"), req);
+        } catch (AkeylessCredentialResolverException e2) {
+          if (e2.getMessage() != null && e2.getMessage().contains("HTTP 404")) {
+            resp = httpPostJson(joinUrl(gwUrl, "/rotated-secret-get-value"), req);
+          } else {
+            throw e2;
+          }
+        }
+      } else {
+        throw e;
+      }
+    }
+
+    Object value = resp.get("value");
+    if (value == null && resp.containsKey(secretPath)) {
+      value = resp.get(secretPath);
+    }
+    if (value == null) {
+      throw new AkeylessCredentialResolverException("Rotated secret value not found for name: " + secretPath);
     }
     if (isContainer(value)) {
       return JSON_STD.asString(value);
@@ -339,9 +466,9 @@ public class CredentialResolver {
 
       case "ssh_private_key":
       case "sn_cfg_ansible": 
-	  case "sn_disco_certmgmt_certificate_ca":
-	  case "cfg_chef_credentials":
-	  case "infoblox": 
+	    case "sn_disco_certmgmt_certificate_ca":
+	    case "cfg_chef_credentials":
+	    case "infoblox": 
       case "api_key":
         putIf(out, VAL_USER, node, fUser);
         putIf(out, VAL_PKEY, node, fPk);
@@ -464,16 +591,21 @@ private static String getMidProp(String name, String dflt) {
   public String getVersion() { return "1.0"; }
 
   public static void main(String[] args) throws Exception {
-    setPropIfMissing("AKEYLESS_GW_URL", "https://api.akeyless.io");
+    setPropIfMissing("AKEYLESS_GW_URL", "http://localhost:8080");
     setPropIfMissing("AKEYLESS_ACCESS_TYPE", "universal_identity");
     setPropIfMissing("AKEYLESS_ACCESS_ID", "p-qwj5c3lzu2nh");
-    setPropIfMissing("AKEYLESS_UID_TOKEN", "u-AQAAAOgDAAD0+6RiuvPVbzVbhPfPK1aDYx3Sa4ujuqUucXdqNWMzbHp1Mm5o");
+    setPropIfMissing("AKEYLESS_UID_TOKEN", "u-AQAAAOgDAADyAR2vjhuBAyFKN132U5PJcGDwwf+aOOkucXdqNWMzbHp1Mm5o");
     
     CredentialResolver cr = new CredentialResolver();
     HashMap<String, String> input = new HashMap<>();
-    input.put(CredentialResolver.ARG_ID, "Alexey-SSH-Pass");
-    //input.put(CredentialResolver.ARG_TYPE, "ssh_private_key");
+    //input.put(CredentialResolver.ARG_ID, "LDAPSAlexey");
+    //input.put(CredentialResolver.ARG_ID, "LDAPSAlexeyRotated");
+    //input.put(CredentialResolver.ARG_ID, "WindowsRotated");
+    //input.put(CredentialResolver.ARG_ID, "SSHRotatedSecret");
+    //input.put(CredentialResolver.ARG_ID, "SSHKeyRotatedSecret");
+    input.put(CredentialResolver.ARG_ID, "RDPDynamic");
     input.put(CredentialResolver.ARG_TYPE, "ssh_password");
+    //input.put(CredentialResolver.ARG_TYPE, "ssh_password");
     Map<String, String> result = cr.resolve(input);
     System.out.println(result);
   }

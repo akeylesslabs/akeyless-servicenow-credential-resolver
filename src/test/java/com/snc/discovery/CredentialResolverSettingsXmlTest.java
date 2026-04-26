@@ -37,6 +37,11 @@ public class CredentialResolverSettingsXmlTest {
                 out.put("token", "T");
                 return out;
             }
+            if (url.endsWith("/describe-item") || url.endsWith("/v2/describe-item")) {
+                Map<String, Object> out = new HashMap<>();
+                out.put("item_type", "STATIC_SECRET");
+                return out;
+            }
             if (url.endsWith("/get-secret-value") || url.endsWith("/v2/get-secret-value")) {
                 Map<String, Object> secrets = new HashMap<>();
                 secrets.put("/s", "pw");
@@ -70,6 +75,11 @@ public class CredentialResolverSettingsXmlTest {
                 Assert.assertEquals("CLOUD-ID-2", p.get("cloud-id"));
                 Map<String, Object> out = new HashMap<>();
                 out.put("token", "T2");
+                return out;
+            }
+            if (url.endsWith("/describe-item") || url.endsWith("/v2/describe-item")) {
+                Map<String, Object> out = new HashMap<>();
+                out.put("item_type", "STATIC_SECRET");
                 return out;
             }
             if (url.endsWith("/get-secret-value") || url.endsWith("/v2/get-secret-value")) {
