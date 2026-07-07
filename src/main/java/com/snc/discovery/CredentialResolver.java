@@ -25,7 +25,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 public class CredentialResolver {
-  private static final Log LOG = LogFactory.getLog(CredentialResolver.class);
+  private static final AkeylessFileLogger FILE_LOG = AkeylessFileLogger.getInstance();
   public static final String ARG_ID = "id"; // the string identifier as configured on the ServiceNow instance
   public static final String ARG_IP = "ip"; // a dotted-form string IPv4 address (like "10.22.231.12") of the target system
   public static final String ARG_TYPE = "type"; // the string type (ssh, snmp, etc.) of credential
@@ -106,31 +106,97 @@ public class CredentialResolver {
     HTTP = new DefaultHttpTransport();
   }
 
+  // -------- Auth token cache (JVM-wide, refreshed on auth errors) --------
+  private static final Object TOKEN_CACHE_LOCK = new Object();
+  private static volatile String cachedToken;
+  private static volatile String cachedGwUrl;
+
+  @FunctionalInterface
+  private interface TokenOperation<T> {
+    T apply(String token) throws Exception;
+  }
+
+  protected static void invalidateTokenCache() {
+    synchronized (TOKEN_CACHE_LOCK) {
+      cachedToken = null;
+      cachedGwUrl = null;
+    }
+  }
+
+  private String getCachedOrAuthenticateToken(String gwUrl) throws Exception {
+    synchronized (TOKEN_CACHE_LOCK) {
+      if (cachedToken != null && gwUrl.equals(cachedGwUrl)) {
+        return cachedToken;
+      }
+      String token = authenticateAkeyless(gwUrl);
+      cachedToken = token;
+      cachedGwUrl = gwUrl;
+      return token;
+    }
+  }
+
+  private static boolean isAuthenticationError(AkeylessCredentialResolverException e) {
+    return getHttpStatusCode(e) == 401;
+  }
+
+  private static int getHttpStatusCode(AkeylessCredentialResolverException e) {
+    String msg = e.getMessage();
+    if (msg == null || !msg.startsWith("HTTP ")) {
+      return -1;
+    }
+    int fromIdx = msg.indexOf(" from ", 5);
+    if (fromIdx < 0) {
+      return -1;
+    }
+    try {
+      return Integer.parseInt(msg.substring(5, fromIdx));
+    } catch (NumberFormatException ex) {
+      return -1;
+    }
+  }
+
+  private <T> T withCachedToken(String gwUrl, TokenOperation<T> operation) throws Exception {
+    String token = getCachedOrAuthenticateToken(gwUrl);
+    try {
+      return operation.apply(token);
+    } catch (AkeylessCredentialResolverException e) {
+      if (!isAuthenticationError(e)) {
+        throw e;
+      }
+      logInfo("Akeyless resolver: cached token rejected, re-authenticating");
+      invalidateTokenCache();
+      String freshToken = getCachedOrAuthenticateToken(gwUrl);
+      return operation.apply(freshToken);
+    }
+  }
+
   public Map<String, String> resolve(Map<String, String> args) throws Exception {
-    LOG.info("Akeyless resolver: resolving secret for args " + args);
-    
-    // --- 1) Inputs from SN
-    final String snType = must(args.get(ARG_TYPE), "Missing arg 'type'");
-    final String secretPath = must(args.get(ARG_ID), "Missing arg 'id' (use your Akeyless secret path)");
-    final String host = args.get(ARG_IP);
+    logInfo("Akeyless resolver: resolving secret for args " + args);
+    try {
+      // --- 1) Inputs from SN
+      final String snType = must(args.get(ARG_TYPE), "Missing arg 'type'");
+      final String secretPath = must(args.get(ARG_ID), "Missing arg 'id' (use your Akeyless secret path)");
+      final String host = args.get(ARG_IP);
 
-    // --- 2) MID properties (all set from the ServiceNow UI)
-    // Optional mapping overrides
-    final String fUser = getMidProp("ext.cred.akeyless.map.username", "username");
-    final String fPass = getMidProp("ext.cred.akeyless.map.password", "password");
-    final String fPk   = getMidProp("ext.cred.akeyless.map.private_key", "private_key");
-    final String fPhr  = getMidProp("ext.cred.akeyless.map.passphrase", "passphrase");
+      // --- 2) MID properties (all set from the ServiceNow UI)
+      // Optional mapping overrides
+      final String fUser = getMidProp("ext.cred.akeyless.map.username", "username");
+      final String fPass = getMidProp("ext.cred.akeyless.map.password", "password");
+      final String fPk   = getMidProp("ext.cred.akeyless.map.private_key", "private_key");
+      final String fPhr  = getMidProp("ext.cred.akeyless.map.passphrase", "passphrase");
 
-  
+      // --- 4) Fetch value
+      String raw = getSecretValue(secretPath, host); // String or JSON (for dynamic/structured secrets)
 
-    // --- 4) Fetch value
-    String raw = getSecretValue(secretPath, host); // String or JSON (for dynamic/structured secrets)
+      // --- 5) Map to SN credential fields
+      Map<String,String> out = mapToServiceNow(snType, raw, fUser, fPass, fPk, fPhr);
 
-    // --- 5) Map to SN credential fields
-    Map<String,String> out = mapToServiceNow(snType, raw, fUser, fPass, fPk, fPhr);
-
-    LOG.info("Akeyless resolver: resolved secret for path '" + secretPath + "' -> fields " + out.keySet());
-    return out;
+      logInfo("Akeyless resolver: resolved secret for path '" + secretPath + "' -> fields " + out.keySet());
+      return out;
+    } catch (Exception e) {
+      logError("Akeyless resolver: resolve failed", e);
+      throw e;
+    }
   }
   private static final String ITEM_TYPE_STATIC = "STATIC_SECRET";
   private static final String ITEM_TYPE_ROTATED = "ROTATED_SECRET";
@@ -141,17 +207,17 @@ public class CredentialResolver {
    */
   private String getSecretValue(String secretPath, String host) throws Exception {
     String gwUrl = getMidProp("ext.cred.akeyless.gw_url", envOr("AKEYLESS_GW_URL", "https://api.akeyless.io"));
-    String token = authenticateAkeyless(gwUrl);
-    String itemType = describeItemType(gwUrl, token, secretPath);
+    String itemType = withCachedToken(gwUrl, token -> describeItemType(gwUrl, token, secretPath));
+    logInfo("Akeyless resolver: described item '" + secretPath + "' as type '" + itemType + "'");
     String normalizedType = itemType == null ? "" : itemType.trim();
     if (itemTypeEquals(normalizedType, ITEM_TYPE_STATIC)) {
-      return getStaticSecretPayload(gwUrl, token, secretPath);
+      return withCachedToken(gwUrl, token -> getStaticSecretPayload(gwUrl, token, secretPath));
     }
     if (itemTypeEquals(normalizedType, ITEM_TYPE_ROTATED)) {
-      return getRotatedSecretPayload(gwUrl, token, secretPath, host);
+      return withCachedToken(gwUrl, token -> getRotatedSecretPayload(gwUrl, token, secretPath, host));
     }
     if (itemTypeEquals(normalizedType, ITEM_TYPE_DYNAMIC)) {
-      return getDynamicSecretPayload(gwUrl, token, secretPath);
+      return withCachedToken(gwUrl, token -> getDynamicSecretPayload(gwUrl, token, secretPath));
     }
     throw new AkeylessCredentialResolverException(
         "Unsupported Akeyless item_type '" + itemType + "' for name: " + secretPath);
@@ -167,7 +233,9 @@ public class CredentialResolver {
     String accessId = must(getMidProp("ext.cred.akeyless.access_id", envOr("AKEYLESS_ACCESS_ID", null)),
             "Missing Akeyless access id: set MID 'ext.cred.akeyless.access_id' or env 'AKEYLESS_ACCESS_ID'");
     String accessKey = getMidProp("ext.cred.akeyless.access_key", envOr("AKEYLESS_ACCESS_KEY", null));
-    String uidToken = getMidProp("ext.cred.akeyless.uid_token", envOr("AKEYLESS_UID_TOKEN", null));
+    String uidTokenFile = getMidProp("ext.cred.akeyless.uid_token_file", envOr("AKEYLESS_UID_TOKEN_FILE", null));
+    String uidTokenInline = getMidProp("ext.cred.akeyless.uid_token", envOr("AKEYLESS_UID_TOKEN", null));
+    String uidToken = resolveUidToken(uidTokenFile, uidTokenInline);
     String certData = getMidProp("ext.cred.akeyless.cert_data", envOr("AKEYLESS_CERT_DATA", null));
     String keyData = getMidProp("ext.cred.akeyless.key_data", envOr("AKEYLESS_KEY_DATA", null));
     String certFileName = getMidProp("ext.cred.akeyless.cert_file_name", envOr("AKEYLESS_CERT_FILE_NAME", null));
@@ -196,7 +264,8 @@ public class CredentialResolver {
         authReq.put("access-type", "universal_identity");
         authReq.put("access-id", accessId);
         authReq.put("uid-token", must(uidToken,
-            "Missing Akeyless UID token: set MID 'ext.cred.akeyless.uid_token' or env 'AKEYLESS_UID_TOKEN'"));
+            "Missing Akeyless UID token: set MID 'ext.cred.akeyless.uid_token_file' (preferred) or "
+                + "'ext.cred.akeyless.uid_token' (fallback), or env 'AKEYLESS_UID_TOKEN_FILE' / 'AKEYLESS_UID_TOKEN'"));
         break;
       case "cert":
         authReq.put("access-type", "certificate");
@@ -241,6 +310,7 @@ public class CredentialResolver {
     if (token == null || token.isEmpty()) {
       throw new AkeylessCredentialResolverException("Akeyless auth returned empty token");
     }
+    logInfo("Akeyless resolver: authenticated via access_type '" + accessType + "'");
     return token;
   }
 
@@ -391,6 +461,28 @@ public class CredentialResolver {
       return "cert";
     }
     return v;
+  }
+
+  private static String resolveUidToken(String uidTokenFile, String uidTokenInline) {
+    if (uidTokenFile != null && !uidTokenFile.isEmpty()) {
+      try {
+        String tokenFromFile;
+        try (var lines = Files.lines(Path.of(uidTokenFile), StandardCharsets.UTF_8)) {
+          tokenFromFile = lines
+              .map(String::trim)
+              .filter(line -> !line.isEmpty())
+              .findFirst()
+              .orElse(null);
+        }
+        if (tokenFromFile != null && !tokenFromFile.isEmpty()) {
+          return tokenFromFile;
+        }
+        logWarn("UID token file '" + uidTokenFile + "' is empty; falling back to inline uid_token");
+      } catch (IOException e) {
+        logWarn("Unable to read UID token file '" + uidTokenFile + "'; falling back to inline uid_token", e);
+      }
+    }
+    return uidTokenInline;
   }
 
   private static byte[] resolvePemMaterial(
@@ -587,23 +679,40 @@ private static String getMidProp(String name, String dflt) {
     return val;
   }
 
+  private static void logInfo(String message) {
+    FILE_LOG.info(message);
+  }
+
+  private static void logWarn(String message) {
+    FILE_LOG.warn(message);
+  }
+
+  private static void logWarn(String message, Throwable t) {
+    FILE_LOG.warn(message, t);
+  }
+
+  private static void logError(String message, Throwable t) {
+    FILE_LOG.error(message, t);
+  }
+
   // Optional (some samples include this; harmless if unused)
   public String getVersion() { return "1.0"; }
 
   public static void main(String[] args) throws Exception {
-    setPropIfMissing("AKEYLESS_GW_URL", "http://localhost:8080");
+    //setPropIfMissing("AKEYLESS_GW_URL", "http://localhost:8080");
     setPropIfMissing("AKEYLESS_ACCESS_TYPE", "universal_identity");
     setPropIfMissing("AKEYLESS_ACCESS_ID", "p-qwj5c3lzu2nh");
-    setPropIfMissing("AKEYLESS_UID_TOKEN", "");
+    setPropIfMissing("AKEYLESS_UID_TOKEN", "token");
     
     CredentialResolver cr = new CredentialResolver();
     HashMap<String, String> input = new HashMap<>();
+    input.put(CredentialResolver.ARG_ID, "alexey1");
     //input.put(CredentialResolver.ARG_ID, "LDAPSAlexey");
     //input.put(CredentialResolver.ARG_ID, "LDAPSAlexeyRotated");
     //input.put(CredentialResolver.ARG_ID, "WindowsRotated");
     //input.put(CredentialResolver.ARG_ID, "SSHRotatedSecret");
     //input.put(CredentialResolver.ARG_ID, "SSHKeyRotatedSecret");
-    input.put(CredentialResolver.ARG_ID, "RDPDynamic");
+    //input.put(CredentialResolver.ARG_ID, "RDPDynamic");
     input.put(CredentialResolver.ARG_TYPE, "ssh_password");
     //input.put(CredentialResolver.ARG_TYPE, "ssh_password");
     Map<String, String> result = cr.resolve(input);
