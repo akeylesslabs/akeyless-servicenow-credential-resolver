@@ -41,13 +41,16 @@ final class AkeylessFileLogger {
   }
 
   static void setLogDirForTests(Path dir) {
-    logDirOverride = dir;
-    resetForTests();
+    synchronized (AkeylessFileLogger.class) {
+      instance = null;
+      logDirOverride = dir;
+    }
   }
 
   static void resetForTests() {
     synchronized (AkeylessFileLogger.class) {
       instance = null;
+      logDirOverride = null;
     }
   }
 

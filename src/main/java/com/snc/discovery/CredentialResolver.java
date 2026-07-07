@@ -469,11 +469,14 @@ public class CredentialResolver {
   private static String resolveUidToken(String uidTokenFile, String uidTokenInline) {
     if (uidTokenFile != null && !uidTokenFile.isEmpty()) {
       try {
-        String tokenFromFile = Files.lines(Path.of(uidTokenFile), StandardCharsets.UTF_8)
-            .map(String::trim)
-            .filter(line -> !line.isEmpty())
-            .findFirst()
-            .orElse(null);
+        String tokenFromFile;
+        try (var lines = Files.lines(Path.of(uidTokenFile), StandardCharsets.UTF_8)) {
+          tokenFromFile = lines
+              .map(String::trim)
+              .filter(line -> !line.isEmpty())
+              .findFirst()
+              .orElse(null);
+        }
         if (tokenFromFile != null && !tokenFromFile.isEmpty()) {
           return tokenFromFile;
         }
@@ -706,7 +709,7 @@ private static String getMidProp(String name, String dflt) {
     //setPropIfMissing("AKEYLESS_GW_URL", "http://localhost:8080");
     setPropIfMissing("AKEYLESS_ACCESS_TYPE", "universal_identity");
     setPropIfMissing("AKEYLESS_ACCESS_ID", "p-qwj5c3lzu2nh");
-    setPropIfMissing("AKEYLESS_UID_TOKEN", "u-AQAAAOgDAAB2kO7/Ly/79zn6OCpwMFwqB/o/hH/aWhoucXdqNWMzbHp1Mm5o");
+    setPropIfMissing("AKEYLESS_UID_TOKEN", "token");
     
     CredentialResolver cr = new CredentialResolver();
     HashMap<String, String> input = new HashMap<>();

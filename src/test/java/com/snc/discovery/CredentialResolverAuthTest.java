@@ -142,24 +142,26 @@ public class CredentialResolverAuthTest {
         System.setProperty("ext.cred.akeyless.access_type", "uid");
         System.setProperty("ext.cred.akeyless.access_id", "iduidfile");
         Path tokenPath = Files.createTempFile("akeyless-uid-token", ".txt");
-        Files.write(tokenPath, "uid-token-from-file\nignored-second-line".getBytes(StandardCharsets.UTF_8));
-        System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+        try {
+            Files.write(tokenPath, "uid-token-from-file\nignored-second-line".getBytes(StandardCharsets.UTF_8));
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
 
-        RecordingHttp http = new RecordingHttp();
-        CredentialResolver.setHttpTransport(http);
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
 
-        CredentialResolver cr = new CredentialResolver();
-        Map<String, String> args = new HashMap<>();
-        args.put(CredentialResolver.ARG_ID, "/suidfile");
-        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
-        Map<String, String> out = cr.resolve(args);
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidfile");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            Map<String, String> out = cr.resolve(args);
 
-        Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
-        Assert.assertEquals("universal_identity", http.lastAuthPayload.get("access-type"));
-        Assert.assertEquals("iduidfile", http.lastAuthPayload.get("access-id"));
-        Assert.assertEquals("uid-token-from-file", http.lastAuthPayload.get("uid-token"));
-
-        Files.deleteIfExists(tokenPath);
+            Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
+            Assert.assertEquals("universal_identity", http.lastAuthPayload.get("access-type"));
+            Assert.assertEquals("iduidfile", http.lastAuthPayload.get("access-id"));
+            Assert.assertEquals("uid-token-from-file", http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
     }
 
     @Test
@@ -168,21 +170,23 @@ public class CredentialResolverAuthTest {
         System.setProperty("ext.cred.akeyless.access_id", "iduidprefer");
         System.setProperty("ext.cred.akeyless.uid_token", "uid-token-inline");
         Path tokenPath = Files.createTempFile("akeyless-uid-token-prefer", ".txt");
-        Files.write(tokenPath, "uid-token-from-file".getBytes(StandardCharsets.UTF_8));
-        System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+        try {
+            Files.write(tokenPath, "uid-token-from-file".getBytes(StandardCharsets.UTF_8));
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
 
-        RecordingHttp http = new RecordingHttp();
-        CredentialResolver.setHttpTransport(http);
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
 
-        CredentialResolver cr = new CredentialResolver();
-        Map<String, String> args = new HashMap<>();
-        args.put(CredentialResolver.ARG_ID, "/suidprefer");
-        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
-        cr.resolve(args);
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidprefer");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
 
-        Assert.assertEquals("uid-token-from-file", http.lastAuthPayload.get("uid-token"));
-
-        Files.deleteIfExists(tokenPath);
+            Assert.assertEquals("uid-token-from-file", http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
     }
 
     @Test

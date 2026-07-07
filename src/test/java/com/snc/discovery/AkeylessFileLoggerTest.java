@@ -5,12 +5,15 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Stream;
 
 public class AkeylessFileLoggerTest {
 
@@ -23,8 +26,18 @@ public class AkeylessFileLoggerTest {
   }
 
   @After
-  public void tearDown() {
+  public void tearDown() throws IOException {
     AkeylessFileLogger.resetForTests();
+    if (tempLogDir != null && Files.exists(tempLogDir)) {
+      try (Stream<Path> paths = Files.walk(tempLogDir)) {
+        paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+          try {
+            Files.deleteIfExists(path);
+          } catch (IOException ignored) {
+          }
+        });
+      }
+    }
   }
 
   @Test
