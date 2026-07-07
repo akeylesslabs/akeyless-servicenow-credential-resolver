@@ -233,7 +233,7 @@ will map to ServiceNow `username = alice`, `password = secret`.
 ### Token caching
 
 - After a successful `/auth` call, the Akeyless session token is cached in memory for the lifetime of the MID Server JVM.
-- Subsequent `resolve()` calls reuse the cached token and skip authentication until Akeyless rejects it (for example HTTP 401 or an invalid/expired token response).
+- Subsequent `resolve()` calls reuse the cached token and skip authentication until Akeyless rejects it with **HTTP 401**.
 - When an API call fails with an authentication error, the cache is cleared, a fresh token is obtained, and the failed call is retried once.
 - There is no configurable TTL; token refresh is driven only by authentication failures from Akeyless.
 

@@ -136,18 +136,23 @@ public class CredentialResolver {
   }
 
   private static boolean isAuthenticationError(AkeylessCredentialResolverException e) {
+    return getHttpStatusCode(e) == 401;
+  }
+
+  private static int getHttpStatusCode(AkeylessCredentialResolverException e) {
     String msg = e.getMessage();
-    if (msg == null) {
-      return false;
+    if (msg == null || !msg.startsWith("HTTP ")) {
+      return -1;
     }
-    String lower = msg.toLowerCase();
-    if (lower.contains("http 401")) {
-      return true;
+    int fromIdx = msg.indexOf(" from ", 5);
+    if (fromIdx < 0) {
+      return -1;
     }
-    return lower.contains("invalid token")
-        || lower.contains("token expired")
-        || lower.contains("token is expired")
-        || lower.contains("unauthorized");
+    try {
+      return Integer.parseInt(msg.substring(5, fromIdx));
+    } catch (NumberFormatException ex) {
+      return -1;
+    }
   }
 
   private <T> T withCachedToken(String gwUrl, TokenOperation<T> operation) throws Exception {
