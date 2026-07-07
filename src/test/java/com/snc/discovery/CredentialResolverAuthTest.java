@@ -72,7 +72,7 @@ public class CredentialResolverAuthTest {
     @After
     public void tearDown() {
         CredentialResolver.resetHttpTransport();
-        CredentialResolver.resetTokenCache();
+        CredentialResolver.invalidateTokenCache();
         System.clearProperty("ext.cred.akeyless.gw_url");
         System.clearProperty("ext.cred.akeyless.access_type");
         System.clearProperty("ext.cred.akeyless.access_id");

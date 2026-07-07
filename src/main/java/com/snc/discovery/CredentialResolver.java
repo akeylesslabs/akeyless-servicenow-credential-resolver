@@ -25,7 +25,6 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 public class CredentialResolver {
-  private static final Log LOG = LogFactory.getLog(CredentialResolver.class);
   private static final AkeylessFileLogger FILE_LOG = AkeylessFileLogger.getInstance();
   public static final String ARG_ID = "id"; // the string identifier as configured on the ServiceNow instance
   public static final String ARG_IP = "ip"; // a dotted-form string IPv4 address (like "10.22.231.12") of the target system
@@ -117,14 +116,7 @@ public class CredentialResolver {
     T apply(String token) throws Exception;
   }
 
-  static void resetTokenCache() {
-    synchronized (TOKEN_CACHE_LOCK) {
-      cachedToken = null;
-      cachedGwUrl = null;
-    }
-  }
-
-  private static void invalidateTokenCache() {
+  protected static void invalidateTokenCache() {
     synchronized (TOKEN_CACHE_LOCK) {
       cachedToken = null;
       cachedGwUrl = null;
@@ -683,22 +675,18 @@ private static String getMidProp(String name, String dflt) {
   }
 
   private static void logInfo(String message) {
-    LOG.info(message);
     FILE_LOG.info(message);
   }
 
   private static void logWarn(String message) {
-    LOG.warn(message);
     FILE_LOG.warn(message);
   }
 
   private static void logWarn(String message, Throwable t) {
-    LOG.warn(message, t);
     FILE_LOG.warn(message, t);
   }
 
   private static void logError(String message, Throwable t) {
-    LOG.error(message, t);
     FILE_LOG.error(message, t);
   }
 
