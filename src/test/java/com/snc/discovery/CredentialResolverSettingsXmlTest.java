@@ -13,6 +13,7 @@ public class CredentialResolverSettingsXmlTest {
     @After
     public void cleanup() {
         CredentialResolver.resetHttpTransport();
+        CredentialResolver.resetTokenCache();
         System.clearProperty("ext.cred.akeyless.gw_url");
         System.clearProperty("ext.cred.akeyless.access_type");
         System.clearProperty("ext.cred.akeyless.access_id");

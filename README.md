@@ -58,7 +58,8 @@ Set the following MID properties on your instance (System Properties or MID Prop
 - `ext.cred.akeyless.access_type` (string): One of `access_key`, `aws_iam`, `azure_ad`, `gcp`, `universal_identity`/`uid`, `cert`/`certificate`. Default: `access_key`
 - `ext.cred.akeyless.access_id` (string): Your Akeyless Access ID (required)
 - `ext.cred.akeyless.access_key` (string): Your Akeyless Access Key (required for `access_key` only)
-- `ext.cred.akeyless.uid_token` (string): Required for `universal_identity` / `uid`
+- `ext.cred.akeyless.uid_token_file` (string): File path on the MID host containing the UID token for `universal_identity` / `uid` (preferred; first non-empty line is used)
+- `ext.cred.akeyless.uid_token` (string): Inline UID token for `universal_identity` / `uid` (fallback when `uid_token_file` is unset or unreadable)
 - `ext.cred.akeyless.cert_data` (string): Inline certificate PEM/text for `cert` auth
 - `ext.cred.akeyless.key_data` (string): Inline private key PEM/text for `cert` auth
 - `ext.cred.akeyless.cert_file_name` (string): File path to certificate PEM on MID host (alternative to `cert_data`)
@@ -77,7 +78,8 @@ Environment/system property alternatives
   - `AKEYLESS_ACCESS_TYPE`
   - `AKEYLESS_ACCESS_ID` (required)
   - `AKEYLESS_ACCESS_KEY` (when using `access_key`)
-  - `AKEYLESS_UID_TOKEN` (when using `universal_identity`/`uid`)
+  - `AKEYLESS_UID_TOKEN_FILE` (preferred file path when using `universal_identity`/`uid`)
+  - `AKEYLESS_UID_TOKEN` (inline fallback when using `universal_identity`/`uid`)
   - `AKEYLESS_CERT_DATA` / `AKEYLESS_KEY_DATA` (inline cert auth)
   - `AKEYLESS_CERT_FILE_NAME` / `AKEYLESS_KEY_FILE_NAME` (file-based cert auth)
 - As a fallback for any `ext.cred.*` property, an environment variable with the uppercased name and dots replaced by underscores is also read (e.g., `EXT_CRED_AKEYLESS_GW_URL`).
@@ -102,8 +104,10 @@ Insert your parameters inside the `<parameters>` block:
     <parameter name="ext.cred.akeyless.access_type" value="access_key" />
     <parameter name="ext.cred.akeyless.access_id" value="AKEYLESS_ACCESS_ID" />
     <parameter name="ext.cred.akeyless.access_key" value="AKEYLESS_SECRET_KEY" secure="true" />
-    <!-- Universal Identity example -->
+    <!-- Universal Identity example (file-based, preferred) -->
     <!-- <parameter name="ext.cred.akeyless.access_type" value="uid" /> -->
+    <!-- <parameter name="ext.cred.akeyless.uid_token_file" value="/opt/agent/creds/uid_token.txt" /> -->
+    <!-- Universal Identity example (inline fallback) -->
     <!-- <parameter name="ext.cred.akeyless.uid_token" value="UID_TOKEN" secure="true" /> -->
     <!-- Certificate auth (inline) -->
     <!-- <parameter name="ext.cred.akeyless.access_type" value="certificate" /> -->
@@ -111,7 +115,7 @@ Insert your parameters inside the `<parameters>` block:
     <!-- <parameter name="ext.cred.akeyless.key_data" value="-----BEGIN PRIVATE KEY-----...-----END PRIVATE KEY-----" secure="true" /> -->
     <!-- Certificate auth (file-based on MID host) -->
     <!-- <parameter name="ext.cred.akeyless.cert_file_name" value="/opt/agent/certs/client.crt" /> -->
-    <!-- <parameter name="ext.cred.akeyless.key_file_name" value="/opt/agent/certs/client.key" secure="true" /> -->
+    <!-- <parameter name="ext.cred.akeyless.key_file_name" value="/opt/agent/certs/client.key" /> -->
 
     <!-- Optional JSON mapping overrides -->
     <parameter name="ext.cred.akeyless.map.username" value="username" />
@@ -226,10 +230,17 @@ will map to ServiceNow `username = alice`, `password = secret`.
 - Ensure the MID Server host is running in the target cloud with the appropriate identity, or that cloud SDK environment is present to retrieve a CloudID.
 - Do not set `access_key` when using CloudID-based methods.
 
+### Token caching
+
+- After a successful `/auth` call, the Akeyless session token is cached in memory for the lifetime of the MID Server JVM.
+- Subsequent `resolve()` calls reuse the cached token and skip authentication until Akeyless rejects it (for example HTTP 401 or an invalid/expired token response).
+- When an API call fails with an authentication error, the cache is cleared, a fresh token is obtained, and the failed call is retried once.
+- There is no configurable TTL; token refresh is driven only by authentication failures from Akeyless.
+
 ### Troubleshooting
 
 - HTTP 400 “Missing required parameter - timestamp” on `/auth`:
-  - Usually indicates the wrong auth flow or missing parameters. Verify `access_type` is set correctly. For CloudID flows, do not set an `access_key`. For `access_key` flows, ensure both `access_id` and `access_key` are set. For `uid`, ensure `uid_token` is set. For `cert`, provide cert/key material (inline or file-based).
+  - Usually indicates the wrong auth flow or missing parameters. Verify `access_type` is set correctly. For CloudID flows, do not set an `access_key`. For `access_key` flows, ensure both `access_id` and `access_key` are set. For `uid`, set `uid_token_file` (preferred) or `uid_token` (fallback). For `cert`, provide cert/key material (inline or file-based).
 - HTTP 404 from `/v2/*` endpoints:
   - The resolver automatically falls back to the non-`/v2` endpoints. If both fail, verify the gateway URL and network reachability.
 - “Secret value not found for name …”:
@@ -238,6 +249,8 @@ will map to ServiceNow `username = alice`, `password = secret`.
   - Often the secret is **not valid strict JSON** because a PEM/certificate/SSH key was pasted with **real line breaks inside the quotes**. Prefer storing JSON with `\n` inside the string. If the payload still contains `-----BEGIN`, the resolver **retries** parsing with a lenient Jackson mode that allows unescaped control characters inside quoted strings.
 - Logging:
   - Resolver logs go through Commons Logging. Check the MID Server logs for entries containing “Akeyless resolver”.
+  - The plugin also writes its own daily-rotated log files under the MID agent `logs/` folder (for example `/opt/agent/logs/akeyless-resolver-YYYY-MM-DD.log` on Linux, or `C:\ServiceNow\agent\logs\akeyless-resolver-YYYY-MM-DD.log` on Windows).
+  - File logs contain the same safe diagnostic messages as the MID logs (args, secret path, item type, resolved field keys). Secret values and tokens are never written to the file.
 
 ### CI/CD Pipeline
 

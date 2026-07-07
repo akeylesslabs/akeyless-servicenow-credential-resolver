@@ -18,12 +18,14 @@ public class CredentialResolverAuthTest {
     private static class RecordingHttp implements CredentialResolver.HttpTransport {
         Map<String, Object> lastAuthPayload;
         String itemTypeForDescribe = "STATIC_SECRET";
+        int authCallCount = 0;
 
         @Override
         public Map<String, Object> postJson(String url, Object payload) throws Exception {
             @SuppressWarnings("unchecked")
             Map<String, Object> p = (Map<String, Object>) payload;
             if (url.endsWith("/v2/auth") || url.endsWith("/auth")) {
+                authCallCount++;
                 lastAuthPayload = p;
                 Map<String, Object> out = new HashMap<>();
                 out.put("token", "TKN");
@@ -70,11 +72,13 @@ public class CredentialResolverAuthTest {
     @After
     public void tearDown() {
         CredentialResolver.resetHttpTransport();
+        CredentialResolver.resetTokenCache();
         System.clearProperty("ext.cred.akeyless.gw_url");
         System.clearProperty("ext.cred.akeyless.access_type");
         System.clearProperty("ext.cred.akeyless.access_id");
         System.clearProperty("ext.cred.akeyless.access_key");
         System.clearProperty("ext.cred.akeyless.uid_token");
+        System.clearProperty("ext.cred.akeyless.uid_token_file");
         System.clearProperty("ext.cred.akeyless.cert_data");
         System.clearProperty("ext.cred.akeyless.key_data");
         System.clearProperty("ext.cred.akeyless.cert_file_name");
@@ -131,6 +135,73 @@ public class CredentialResolverAuthTest {
         Assert.assertEquals("id2", http.lastAuthPayload.get("access-id"));
         Assert.assertEquals("CLOUD-ID", http.lastAuthPayload.get("cloud-id"));
         Assert.assertFalse(http.lastAuthPayload.containsKey("access-key"));
+    }
+
+    @Test
+    public void testUidAuthReadsTokenFromFile() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidfile");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token", ".txt");
+        Files.write(tokenPath, "uid-token-from-file\nignored-second-line".getBytes(StandardCharsets.UTF_8));
+        System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/suidfile");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        Map<String, String> out = cr.resolve(args);
+
+        Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
+        Assert.assertEquals("universal_identity", http.lastAuthPayload.get("access-type"));
+        Assert.assertEquals("iduidfile", http.lastAuthPayload.get("access-id"));
+        Assert.assertEquals("uid-token-from-file", http.lastAuthPayload.get("uid-token"));
+
+        Files.deleteIfExists(tokenPath);
+    }
+
+    @Test
+    public void testUidAuthPrefersFileOverInlineToken() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidprefer");
+        System.setProperty("ext.cred.akeyless.uid_token", "uid-token-inline");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-prefer", ".txt");
+        Files.write(tokenPath, "uid-token-from-file".getBytes(StandardCharsets.UTF_8));
+        System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/suidprefer");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        cr.resolve(args);
+
+        Assert.assertEquals("uid-token-from-file", http.lastAuthPayload.get("uid-token"));
+
+        Files.deleteIfExists(tokenPath);
+    }
+
+    @Test
+    public void testUidAuthFallsBackToInlineWhenFileMissing() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidfallback");
+        System.setProperty("ext.cred.akeyless.uid_token", "uid-token-inline-fallback");
+        System.setProperty("ext.cred.akeyless.uid_token_file", "/nonexistent/uid-token.txt");
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/suidfallback");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        cr.resolve(args);
+
+        Assert.assertEquals("uid-token-inline-fallback", http.lastAuthPayload.get("uid-token"));
     }
 
     @Test
@@ -350,6 +421,109 @@ public class CredentialResolverAuthTest {
             Assert.assertTrue(expected.getMessage().contains("Unsupported Akeyless item_type"));
             Assert.assertTrue(expected.getMessage().contains("TARGET"));
         }
+    }
+
+    @Test
+    public void testSecondResolveReusesCachedToken() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "access_key");
+        System.setProperty("ext.cred.akeyless.access_id", "id1");
+        System.setProperty("ext.cred.akeyless.access_key", "k1");
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/s");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+
+        cr.resolve(args);
+        cr.resolve(args);
+
+        Assert.assertEquals(1, http.authCallCount);
+    }
+
+    @Test
+    public void testAuthErrorOnDescribeTriggersReauthAndRetry() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "access_key");
+        System.setProperty("ext.cred.akeyless.access_id", "id1");
+        System.setProperty("ext.cred.akeyless.access_key", "k1");
+
+        final int[] authCallCount = {0};
+        final int[] describeCallCount = {0};
+        CredentialResolver.setHttpTransport((url, payload) -> {
+            if (url.endsWith("/v2/auth") || url.endsWith("/auth")) {
+                authCallCount[0]++;
+                Map<String, Object> out = new HashMap<>();
+                out.put("token", "TKN-" + authCallCount[0]);
+                return out;
+            }
+            if (url.endsWith("/v2/describe-item") || url.endsWith("/describe-item")) {
+                describeCallCount[0]++;
+                if (describeCallCount[0] == 1) {
+                    throw new AkeylessCredentialResolverException(
+                        "HTTP 401 from https://fake/v2/describe-item: invalid token");
+                }
+                Map<String, Object> out = new HashMap<>();
+                out.put("item_type", "STATIC_SECRET");
+                return out;
+            }
+            if (url.endsWith("/v2/get-secret-value") || url.endsWith("/get-secret-value")) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> p = (Map<String, Object>) payload;
+                String name = (String) p.get("name");
+                Map<String, Object> secrets = new HashMap<>();
+                secrets.put(name, "pw123");
+                Map<String, Object> out = new HashMap<>();
+                out.put("secrets", secrets);
+                return out;
+            }
+            throw new AssertionError("Unexpected URL: " + url);
+        });
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/s");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        Map<String, String> out = cr.resolve(args);
+
+        Assert.assertEquals("pw123", out.get(CredentialResolver.VAL_PSWD));
+        Assert.assertEquals(2, authCallCount[0]);
+        Assert.assertEquals(2, describeCallCount[0]);
+    }
+
+    @Test
+    public void testNonAuthErrorDoesNotReauth() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "access_key");
+        System.setProperty("ext.cred.akeyless.access_id", "id1");
+        System.setProperty("ext.cred.akeyless.access_key", "k1");
+
+        final int[] authCallCount = {0};
+        CredentialResolver.setHttpTransport((url, payload) -> {
+            if (url.endsWith("/v2/auth") || url.endsWith("/auth")) {
+                authCallCount[0]++;
+                Map<String, Object> out = new HashMap<>();
+                out.put("token", "TKN");
+                return out;
+            }
+            if (url.endsWith("/v2/describe-item") || url.endsWith("/describe-item")) {
+                throw new AkeylessCredentialResolverException(
+                    "HTTP 503 from https://fake/v2/describe-item: unavailable");
+            }
+            throw new AssertionError("Unexpected URL after describe failure: " + url);
+        });
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/s");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        try {
+            cr.resolve(args);
+            Assert.fail("Expected AkeylessCredentialResolverException from describe-item");
+        } catch (AkeylessCredentialResolverException expected) {
+            Assert.assertTrue(expected.getMessage().contains("503"));
+        }
+        Assert.assertEquals(1, authCallCount[0]);
     }
 }
 
