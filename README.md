@@ -66,6 +66,16 @@ Set the following MID properties on your instance (System Properties or MID Prop
 - `ext.cred.akeyless.key_file_name` (string): File path to private key PEM on MID host (alternative to `key_data`)
 - `ext.cred.akeyless.ignore_cache` (boolean string `true|false`): For Rotated Secrets only, pass `ignore-cache` to Akeyless when fetching a rotated value. Default: `false`
 
+TLS trust for private / self-signed Gateway certificates (Vault-style CA upload; hostname verification stays enabled):
+- `ext.cred.akeyless.ca` (string): One or more X.509 CA or self-signed server certificates in PEM format. Merged into the JVM default truststore for Gateway HTTPS calls.
+- `ext.cred.akeyless.ca_file` (string): File path on the MID host to a PEM file (alternative to `ext.cred.akeyless.ca`)
+
+HTTP proxy for Gateway calls (MID `mid.proxy.*` is **not** used by raw Java HTTP unless the plugin reads it):
+- `ext.cred.akeyless.proxy_host` (string): Explicit HTTP proxy host for Akeyless Gateway traffic
+- `ext.cred.akeyless.proxy_port` (string): Proxy port (default `8080` when host is set)
+- `ext.cred.akeyless.proxy_username` / `ext.cred.akeyless.proxy_password` (optional): Proxy authentication
+- If `ext.cred.akeyless.proxy_host` is unset and `mid.proxy.use_proxy=true`, the resolver falls back to `mid.proxy.host` / `mid.proxy.port` / `mid.proxy.username` / `mid.proxy.password`
+
 Optional field mapping overrides for JSON secrets (see Mapping section below):
 - `ext.cred.akeyless.map.username` (default: `username`)
 - `ext.cred.akeyless.map.password` (default: `password`)
@@ -82,6 +92,8 @@ Environment/system property alternatives
   - `AKEYLESS_UID_TOKEN` (inline fallback when using `universal_identity`/`uid`)
   - `AKEYLESS_CERT_DATA` / `AKEYLESS_KEY_DATA` (inline cert auth)
   - `AKEYLESS_CERT_FILE_NAME` / `AKEYLESS_KEY_FILE_NAME` (file-based cert auth)
+  - `AKEYLESS_CA` / `AKEYLESS_CA_FILE` (Gateway TLS trust)
+  - `AKEYLESS_PROXY_HOST` / `AKEYLESS_PROXY_PORT` / `AKEYLESS_PROXY_USERNAME` / `AKEYLESS_PROXY_PASSWORD`
 - As a fallback for any `ext.cred.*` property, an environment variable with the uppercased name and dots replaced by underscores is also read (e.g., `EXT_CRED_AKEYLESS_GW_URL`).
 - Precedence: MID properties override environment/system variables.
 
@@ -122,6 +134,16 @@ Insert your parameters inside the `<parameters>` block:
     <parameter name="ext.cred.akeyless.map.password" value="password" />
     <parameter name="ext.cred.akeyless.map.private_key" value="private_key" />
     <parameter name="ext.cred.akeyless.map.passphrase" value="passphrase" />
+
+    <!-- Private / self-signed Gateway CA (PEM). Prefer ca_file for large PEMs. -->
+    <!-- <parameter name="ext.cred.akeyless.ca_file" value="/opt/agent/certs/akeyless-gw-ca.pem" /> -->
+    <!-- Or inline: <parameter name="ext.cred.akeyless.ca" value="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" /> -->
+
+    <!-- Explicit proxy for Akeyless Gateway calls (overrides mid.proxy.* when set) -->
+    <!-- <parameter name="ext.cred.akeyless.proxy_host" value="proxy.example.com" /> -->
+    <!-- <parameter name="ext.cred.akeyless.proxy_port" value="3128" /> -->
+    <!-- <parameter name="ext.cred.akeyless.proxy_username" value="proxy-user" /> -->
+    <!-- <parameter name="ext.cred.akeyless.proxy_password" value="proxy-pass" secure="true" /> -->
 </parameters>
 ```
 
@@ -239,6 +261,14 @@ will map to ServiceNow `username = alice`, `password = secret`.
 
 ### Troubleshooting
 
+- TLS / `SSLHandshakeException` / “Hostname validation”:
+  - The resolver uses the MID JVM truststore by default and **always** verifies the Gateway hostname against the certificate SAN/CN. `curl -k` is not equivalent.
+  - Private or self-signed Gateway CA: set `ext.cred.akeyless.ca` (PEM) or `ext.cred.akeyless.ca_file`. This trusts the certificate; it does **not** disable hostname checks.
+  - If the error is specifically hostname validation, ensure `ext.cred.akeyless.gw_url` uses a host name present on the certificate (not an IP unless the cert has that IP SAN).
+  - Alternatively, import the CA into the MID JRE truststore (`agent/jre/lib/security/cacerts` or an external truststore via `wrapper-override.conf`) as described in ServiceNow MID SSL docs.
+- Proxy connectivity:
+  - Configuring only `mid.proxy.*` for instance traffic is not enough unless `mid.proxy.use_proxy=true` (the resolver will then reuse those settings) **or** you set `ext.cred.akeyless.proxy_*`.
+  - JVM system properties `https.proxyHost` / `https.proxyPort` are still honored when no explicit Akeyless/MID proxy is configured.
 - HTTP 400 “Missing required parameter - timestamp” on `/auth`:
   - Usually indicates the wrong auth flow or missing parameters. Verify `access_type` is set correctly. For CloudID flows, do not set an `access_key`. For `access_key` flows, ensure both `access_id` and `access_key` are set. For `uid`, set `uid_token_file` (preferred) or `uid_token` (fallback). For `cert`, provide cert/key material (inline or file-based).
 - HTTP 404 from `/v2/*` endpoints:
