@@ -46,6 +46,8 @@ final class GatewayHttpSupport {
 
   private static final Object PROXY_AUTH_LOCK = new Object();
   private static volatile boolean proxyAuthenticatorInstalled;
+  private static volatile String proxyAuthHost;
+  private static volatile int proxyAuthPort;
   private static volatile String proxyAuthUser;
   private static volatile String proxyAuthPassword;
 
@@ -79,7 +81,8 @@ final class GatewayHttpSupport {
       user = proxySettings.username;
       pass = proxySettings.password;
       if (user != null && !user.isEmpty()) {
-        installProxyAuthenticator(user, pass == null ? "" : pass);
+        installProxyAuthenticator(
+            proxySettings.host, proxySettings.port, user, pass == null ? "" : pass);
       }
     }
     return new Config(ssl, proxy, user, pass);
@@ -162,23 +165,19 @@ final class GatewayHttpSupport {
   }
 
   static ProxySettings resolveProxy(BiFunction<String, String, String> getProp) {
-    String host = trimToNull(getProp.apply(PROP_PROXY_HOST, null));
-    String portRaw = trimToNull(getProp.apply(PROP_PROXY_PORT, null));
-    String user = trimToNull(getProp.apply(PROP_PROXY_USERNAME, null));
-    String pass = getProp.apply(PROP_PROXY_PASSWORD, null);
-
-    if (host == null) {
-      host = trimToNull(envOr("AKEYLESS_PROXY_HOST", null));
-      if (portRaw == null) {
-        portRaw = trimToNull(envOr("AKEYLESS_PROXY_PORT", null));
-      }
-      if (user == null) {
-        user = trimToNull(envOr("AKEYLESS_PROXY_USERNAME", null));
-      }
-      if (pass == null || pass.isEmpty()) {
-        pass = envOr("AKEYLESS_PROXY_PASSWORD", null);
-      }
-    }
+    // Resolve each Akeyless field independently (MID props / env), then MID proxy as a whole.
+    String host = firstNonBlank(
+        getProp.apply(PROP_PROXY_HOST, null),
+        envOr("AKEYLESS_PROXY_HOST", null));
+    String portRaw = firstNonBlank(
+        getProp.apply(PROP_PROXY_PORT, null),
+        envOr("AKEYLESS_PROXY_PORT", null));
+    String user = firstNonBlank(
+        getProp.apply(PROP_PROXY_USERNAME, null),
+        envOr("AKEYLESS_PROXY_USERNAME", null));
+    String pass = firstNonBlank(
+        getProp.apply(PROP_PROXY_PASSWORD, null),
+        envOr("AKEYLESS_PROXY_PASSWORD", null));
 
     if (host == null) {
       // Fall back to MID Server proxy settings when enabled.
@@ -222,8 +221,15 @@ final class GatewayHttpSupport {
     }
   }
 
-  private static void installProxyAuthenticator(String user, String password) {
+  /**
+   * Installs a JVM Authenticator that only answers PROXY challenges for the configured
+   * host/port. HttpURLConnection HTTPS CONNECT still requires an Authenticator; credentials
+   * are not returned for unrelated proxies. Also set {@code Proxy-Authorization} per request.
+   */
+  private static void installProxyAuthenticator(String host, int port, String user, String password) {
     synchronized (PROXY_AUTH_LOCK) {
+      proxyAuthHost = host;
+      proxyAuthPort = port;
       proxyAuthUser = user;
       proxyAuthPassword = password;
       if (!proxyAuthenticatorInstalled) {
@@ -231,6 +237,9 @@ final class GatewayHttpSupport {
           @Override
           protected PasswordAuthentication getPasswordAuthentication() {
             if (getRequestorType() != RequestorType.PROXY) {
+              return null;
+            }
+            if (!matchesConfiguredProxy(getRequestingHost(), getRequestingPort())) {
               return null;
             }
             String u = proxyAuthUser;
@@ -244,6 +253,15 @@ final class GatewayHttpSupport {
         proxyAuthenticatorInstalled = true;
       }
     }
+  }
+
+  /** Package-visible for tests: whether a proxy challenge matches the configured proxy. */
+  static boolean matchesConfiguredProxy(String requestHost, int requestPort) {
+    String expectedHost = proxyAuthHost;
+    if (expectedHost == null || requestHost == null) {
+      return false;
+    }
+    return expectedHost.equalsIgnoreCase(requestHost) && requestPort == proxyAuthPort;
   }
 
   private static X509TrustManager defaultTrustManager() throws Exception {
@@ -273,6 +291,11 @@ final class GatewayHttpSupport {
     return t.isEmpty() ? null : t;
   }
 
+  private static String firstNonBlank(String a, String b) {
+    String first = trimToNull(a);
+    return first != null ? first : trimToNull(b);
+  }
+
   private static String envOr(String name, String dflt) {
     String v = System.getProperty(name);
     if (v == null || v.isEmpty()) {
@@ -284,6 +307,8 @@ final class GatewayHttpSupport {
   /** Test-only: clear proxy authenticator state. */
   static void resetProxyAuthenticatorForTests() {
     synchronized (PROXY_AUTH_LOCK) {
+      proxyAuthHost = null;
+      proxyAuthPort = 0;
       proxyAuthUser = null;
       proxyAuthPassword = null;
       // Authenticator.setDefault(null) clears; safe in unit tests

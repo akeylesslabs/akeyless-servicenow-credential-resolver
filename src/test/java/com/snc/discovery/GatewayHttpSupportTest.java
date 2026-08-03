@@ -127,6 +127,41 @@ public class GatewayHttpSupportTest {
   }
 
   @Test
+  public void testProxyEnvFieldsResolvedIndependentlyOfPropHost() {
+    System.setProperty("AKEYLESS_PROXY_PORT", "9999");
+    System.setProperty("AKEYLESS_PROXY_USERNAME", "env-user");
+    System.setProperty("AKEYLESS_PROXY_PASSWORD", "env-pass");
+    try {
+      Map<String, String> props = new HashMap<>();
+      props.put(GatewayHttpSupport.PROP_PROXY_HOST, "proxy-from-prop");
+      GatewayHttpSupport.ProxySettings s = GatewayHttpSupport.resolveProxy(mapProp(props));
+      Assert.assertEquals("proxy-from-prop", s.host);
+      Assert.assertEquals(9999, s.port);
+      Assert.assertEquals("env-user", s.username);
+      Assert.assertEquals("env-pass", s.password);
+    } finally {
+      System.clearProperty("AKEYLESS_PROXY_PORT");
+      System.clearProperty("AKEYLESS_PROXY_USERNAME");
+      System.clearProperty("AKEYLESS_PROXY_PASSWORD");
+    }
+  }
+
+  @Test
+  public void testProxyAuthenticatorMatchesOnlyConfiguredHostPort() throws Exception {
+    Map<String, String> props = new HashMap<>();
+    props.put(GatewayHttpSupport.PROP_PROXY_HOST, "proxy.local");
+    props.put(GatewayHttpSupport.PROP_PROXY_PORT, "3128");
+    props.put(GatewayHttpSupport.PROP_PROXY_USERNAME, "u");
+    props.put(GatewayHttpSupport.PROP_PROXY_PASSWORD, "p");
+    GatewayHttpSupport.load(mapProp(props));
+
+    Assert.assertTrue(GatewayHttpSupport.matchesConfiguredProxy("proxy.local", 3128));
+    Assert.assertTrue(GatewayHttpSupport.matchesConfiguredProxy("PROXY.LOCAL", 3128));
+    Assert.assertFalse(GatewayHttpSupport.matchesConfiguredProxy("other.proxy", 3128));
+    Assert.assertFalse(GatewayHttpSupport.matchesConfiguredProxy("proxy.local", 8080));
+  }
+
+  @Test
   public void testLoadConfigWiresSslAndProxy() throws Exception {
     String pem = generateSelfSignedPem();
     Map<String, String> props = new HashMap<>();

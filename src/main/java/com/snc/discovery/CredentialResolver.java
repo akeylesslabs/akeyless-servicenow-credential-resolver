@@ -19,7 +19,6 @@ import java.util.Collections;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLHandshakeException;
 
@@ -79,6 +78,14 @@ public class CredentialResolver {
         conn.setReadTimeout(30_000);
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setRequestProperty("Accept", "application/json");
+        // Request-scoped Basic proxy auth (supplements host/port-scoped Authenticator for CONNECT).
+        if (httpCfg.proxyUsername != null && !httpCfg.proxyUsername.isEmpty()) {
+          String cred = httpCfg.proxyUsername + ":"
+              + (httpCfg.proxyPassword == null ? "" : httpCfg.proxyPassword);
+          conn.setRequestProperty(
+              "Proxy-Authorization",
+              "Basic " + Base64.getEncoder().encodeToString(cred.getBytes(StandardCharsets.UTF_8)));
+        }
         if (body.length > 0) {
           try (OutputStream os = conn.getOutputStream()) {
             os.write(body);
@@ -89,10 +96,15 @@ public class CredentialResolver {
           if (is == null) {
             throw new AkeylessCredentialResolverException("HTTP error: " + code + " with empty body from " + url);
           }
-          Object resp = JSON_STD.anyFrom(is);
+          // Non-2xx: read raw text so HTML/plain proxy/Gateway errors still yield "HTTP <code>"
+          // and preserve /v2 -> legacy endpoint fallback.
           if (code < 200 || code >= 300) {
-            String bodyStr = JSON_STD.asString(Objects.requireNonNullElse(resp, ""));
+            String bodyStr = new String(is.readAllBytes(), StandardCharsets.UTF_8);
             throw new AkeylessCredentialResolverException("HTTP " + code + " from " + url + ": " + bodyStr);
+          }
+          Object resp = JSON_STD.anyFrom(is);
+          if (resp == null) {
+            throw new AkeylessCredentialResolverException("Unexpected null JSON response from " + url);
           }
           if (!(resp instanceof Map)) {
             throw new AkeylessCredentialResolverException(
