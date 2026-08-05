@@ -19,7 +19,8 @@ import java.util.Collections;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLHandshakeException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -62,34 +63,65 @@ public class CredentialResolver {
     @Override
     public Map<String, Object> postJson(String url, Object payload) throws Exception {
       byte[] body = payload == null ? new byte[0] : JSON_STD.asBytes(payload);
-      HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-      conn.setRequestMethod("POST");
-      conn.setDoOutput(true);
-      conn.setConnectTimeout(15_000);
-      conn.setReadTimeout(30_000);
-      conn.setRequestProperty("Content-Type", "application/json");
-      conn.setRequestProperty("Accept", "application/json");
-      if (body.length > 0) {
-        try (OutputStream os = conn.getOutputStream()) {
-          os.write(body);
+      GatewayHttpSupport.Config httpCfg = GatewayHttpSupport.load(CredentialResolver::getMidProp);
+      URL target = new URL(url);
+      HttpURLConnection conn = httpCfg.proxy != null
+          ? (HttpURLConnection) target.openConnection(httpCfg.proxy)
+          : (HttpURLConnection) target.openConnection();
+      try {
+        if (conn instanceof HttpsURLConnection) {
+          GatewayHttpSupport.applyTls((HttpsURLConnection) conn, httpCfg.sslContext);
         }
-      }
-      int code = conn.getResponseCode();
-      try (InputStream is = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream()) {
-        if (is == null) {
-          throw new AkeylessCredentialResolverException("HTTP error: " + code + " with empty body from " + url);
+        conn.setRequestMethod("POST");
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(15_000);
+        conn.setReadTimeout(30_000);
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("Accept", "application/json");
+        // Request-scoped Basic proxy auth (supplements host/port-scoped Authenticator for CONNECT).
+        if (httpCfg.proxyUsername != null && !httpCfg.proxyUsername.isEmpty()) {
+          String cred = httpCfg.proxyUsername + ":"
+              + (httpCfg.proxyPassword == null ? "" : httpCfg.proxyPassword);
+          conn.setRequestProperty(
+              "Proxy-Authorization",
+              "Basic " + Base64.getEncoder().encodeToString(cred.getBytes(StandardCharsets.UTF_8)));
         }
-        Object resp = JSON_STD.anyFrom(is);
-        if (code < 200 || code >= 300) {
-          String bodyStr = JSON_STD.asString(Objects.requireNonNullElse(resp, ""));
-          throw new AkeylessCredentialResolverException("HTTP " + code + " from " + url + ": " + bodyStr);
+        if (body.length > 0) {
+          try (OutputStream os = conn.getOutputStream()) {
+            os.write(body);
+          }
         }
-        if (!(resp instanceof Map)) {
-          throw new AkeylessCredentialResolverException("Unexpected response type from " + url + ": " + resp.getClass().getSimpleName());
+        int code = conn.getResponseCode();
+        try (InputStream is = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream()) {
+          if (is == null) {
+            throw new AkeylessCredentialResolverException("HTTP error: " + code + " with empty body from " + url);
+          }
+          // Non-2xx: read raw text so HTML/plain proxy/Gateway errors still yield "HTTP <code>"
+          // and preserve /v2 -> legacy endpoint fallback.
+          if (code < 200 || code >= 300) {
+            String bodyStr = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            throw new AkeylessCredentialResolverException("HTTP " + code + " from " + url + ": " + bodyStr);
+          }
+          Object resp = JSON_STD.anyFrom(is);
+          if (resp == null) {
+            throw new AkeylessCredentialResolverException("Unexpected null JSON response from " + url);
+          }
+          if (!(resp instanceof Map)) {
+            throw new AkeylessCredentialResolverException(
+                "Unexpected response type from " + url + ": " + resp.getClass().getSimpleName());
+          }
+          @SuppressWarnings("unchecked")
+          Map<String, Object> map = (Map<String, Object>) resp;
+          return map;
         }
-        @SuppressWarnings("unchecked")
-        Map<String, Object> map = (Map<String, Object>) resp;
-        return map;
+      } catch (SSLHandshakeException e) {
+        throw new AkeylessCredentialResolverException(
+            "TLS handshake failed for " + url + ": " + e.getMessage()
+                + ". If the Gateway uses a private or self-signed CA, set MID property '"
+                + GatewayHttpSupport.PROP_CA + "' (PEM) or '" + GatewayHttpSupport.PROP_CA_FILE
+                + "'. The hostname in ext.cred.akeyless.gw_url must match a certificate SAN/CN"
+                + " (hostname verification is always enabled).",
+            e);
       } finally {
         conn.disconnect();
       }
