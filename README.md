@@ -9,7 +9,7 @@ This project provides a ServiceNow MID external credential resolver that retriev
 
 - ServiceNow instance (Quebec+ recommended) with Discovery and External Credentials enabled.
 - MID Server installed and connected to your instance.
-- Network access from the MID Server host to the Akeyless Gateway (default `https://api.akeyless.io`, or your private gateway URL).
+- Network access from the MID Server host to the Akeyless Gateway (default `https://api.akeyless.io`, or your private gateway URL). If traffic must go through an HTTP proxy, see [Gateway TLS and HTTP proxy](#gateway-tls-and-http-proxy).
 - An Akeyless Access ID and one of the supported authentication methods listed below.
 
 ### Supported Akeyless authentication methods
@@ -66,14 +66,12 @@ Set the following MID properties on your instance (System Properties or MID Prop
 - `ext.cred.akeyless.key_file_name` (string): File path to private key PEM on MID host (alternative to `key_data`)
 - `ext.cred.akeyless.ignore_cache` (boolean string `true|false`): For Rotated Secrets only, pass `ignore-cache` to Akeyless when fetching a rotated value. Default: `false`
 
-TLS trust for private / self-signed Gateway certificates (Vault-style CA upload; hostname verification stays enabled):
-- `ext.cred.akeyless.ca` (string): One or more X.509 CA or self-signed server certificates in PEM format. Merged into the JVM default truststore for Gateway HTTPS calls.
+TLS trust and HTTP proxy (see [Gateway TLS and HTTP proxy](#gateway-tls-and-http-proxy) for behavior and test flows):
+- `ext.cred.akeyless.ca` (string): One or more X.509 CA or self-signed server certificates in PEM format. Merged into the JVM default truststore for Gateway HTTPS calls. Hostname verification stays enabled.
 - `ext.cred.akeyless.ca_file` (string): File path on the MID host to a PEM file (alternative to `ext.cred.akeyless.ca`)
-
-HTTP proxy for Gateway calls (MID `mid.proxy.*` is **not** used by raw Java HTTP unless the plugin reads it):
 - `ext.cred.akeyless.proxy_host` (string): Explicit HTTP proxy host for Akeyless Gateway traffic
 - `ext.cred.akeyless.proxy_port` (string): Proxy port (default `8080` when host is set)
-- `ext.cred.akeyless.proxy_username` / `ext.cred.akeyless.proxy_password` (optional): Proxy authentication
+- `ext.cred.akeyless.proxy_username` / `ext.cred.akeyless.proxy_password` (optional): Proxy Basic authentication
 - If `ext.cred.akeyless.proxy_host` is unset and `mid.proxy.use_proxy=true`, the resolver falls back to `mid.proxy.host` / `mid.proxy.port` / `mid.proxy.username` / `mid.proxy.password`
 
 Optional field mapping overrides for JSON secrets (see Mapping section below):
@@ -159,6 +157,23 @@ Or on Windows (from an elevated Command Prompt):
 net stop mid
 net start mid
 ```
+
+### Gateway TLS and HTTP proxy
+
+Gateway HTTPS calls use the MID JVM truststore by default. There is **no** TLS skip-verify path (`curl -k` is not equivalent): the hostname in `ext.cred.akeyless.gw_url` must match a certificate SAN/CN.
+
+| Scenario | What to configure |
+|----------|-------------------|
+| Public CA–signed Gateway (e.g. `api.akeyless.io`) | Nothing extra |
+| Private / self-signed Gateway CA | `ext.cred.akeyless.ca` or `ext.cred.akeyless.ca_file` (prefer file for large PEMs) |
+| HTTP forward proxy between MID and Gateway | `ext.cred.akeyless.proxy_*`, **or** `mid.proxy.use_proxy=true` with `mid.proxy.*`, **or** JVM `https.proxyHost` / `https.proxyPort` when neither is set |
+| Proxy + private CA together | Set both CA and proxy properties; TLS remains end-to-end to the Gateway via HTTP `CONNECT` |
+| Proxy that performs TLS inspection (MITM) | Also trust the **proxy** CA (same `ca` / `ca_file` mechanism) |
+
+Proxy notes:
+- Only **HTTP** proxies are supported (HTTPS targets use `CONNECT`). SOCKS is not supported.
+- Explicit `ext.cred.akeyless.proxy_host` overrides MID `mid.proxy.*`.
+- Configuring `mid.proxy.*` for instance traffic alone is not enough unless `mid.proxy.use_proxy=true` (fallback) or you set `ext.cred.akeyless.proxy_*`.
 
 ### Configure a Discovery Credential to use this resolver
 
@@ -325,15 +340,120 @@ Deployments only happen when you manually trigger the workflow:
 
 **Why manual for releases?** Maven Central deployments are permanent - manual publishing gives you final control over when releases become public. Snapshots auto-publish for faster development iteration.
 
-### Local/dev testing (optional)
+### Testing
 
-You can run unit tests locally:
+#### Unit tests (local)
 
 ```bash
 mvn test -Drevision=1.0.0-TEST
 ```
 
-To quickly sanity-check end-to-end against Akeyless, set environment variables and create a Discovery credential that points to a known secret path. For cloud-based auth types, run the MID on a host with a valid cloud identity.
+These cover CA PEM parsing / SSLContext build, proxy resolution precedence (Akeyless props vs `mid.proxy.*`), and proxy authenticator host/port matching. They do **not** call a live Gateway.
+
+#### End-to-end on a MID Server
+
+Use this flow after building and installing the shaded JAR (see [Install the resolver on the MID Server](#install-the-resolver-on-the-mid-server)).
+
+**1) Baseline MID configuration**
+
+On the MID host, edit `config.xml` (Linux: `/opt/agent/config.xml`, Windows: `C:\ServiceNow\agent\config.xml`) or set the same names as MID properties in the instance.
+
+Minimum for `access_key` against a public Gateway:
+
+```xml
+<parameter name="ext.cred.akeyless.gw_url" value="https://api.akeyless.io" />
+<parameter name="ext.cred.akeyless.access_type" value="access_key" />
+<parameter name="ext.cred.akeyless.access_id" value="YOUR_ACCESS_ID" />
+<parameter name="ext.cred.akeyless.access_key" value="YOUR_ACCESS_KEY" secure="true" />
+```
+
+Restart the MID after changes:
+
+```bash
+sudo service mid restart
+```
+
+**2) Create and test a Discovery credential**
+
+1. Discovery → Credentials → New → choose a type (e.g. SSH Password / Windows).
+2. Enable **External credential store**.
+3. Fully Qualified Class Name: `com.snc.discovery.CredentialResolver`
+4. Credential ID: an Akeyless secret path the identity can read (e.g. `/lab/snc/test`).
+5. Save → **Test credential** → select this MID Server (and a target if the type requires one).
+
+Success means auth + secret fetch + field mapping work. Failures appear in MID logs and in `/opt/agent/logs/akeyless-resolver-YYYY-MM-DD.log` (Windows: `C:\ServiceNow\agent\logs\`).
+
+**3) Private / self-signed Gateway HTTPS**
+
+1. Export the Gateway CA (or self-signed server cert) as PEM to the MID host, e.g. `/opt/agent/certs/akeyless-gw-ca.pem`.
+2. Ensure `gw_url` uses a hostname that appears on the certificate (not a raw IP unless the cert has that IP SAN):
+
+```xml
+<parameter name="ext.cred.akeyless.gw_url" value="https://gw.example.internal" />
+<parameter name="ext.cred.akeyless.ca_file" value="/opt/agent/certs/akeyless-gw-ca.pem" />
+```
+
+3. Restart MID → run **Test credential** again.
+4. Optional negative check: remove `ca_file`, restart, retest — expect a TLS handshake error mentioning `ext.cred.akeyless.ca` / `ca_file`.
+5. Optional hostname check: point `gw_url` at an IP or wrong name while keeping a valid CA — expect hostname validation failure (trust alone is not enough).
+
+Host-level sanity check (not identical to the Java path, but useful):
+
+```bash
+openssl s_client -connect gw.example.internal:443 -servername gw.example.internal </dev/null
+```
+
+**4) HTTP proxy between MID and Gateway**
+
+1. Confirm the proxy allows `CONNECT` to the Gateway host and port (usually 443).
+2. Prefer an explicit Akeyless proxy (does not require `mid.proxy.use_proxy`):
+
+```xml
+<parameter name="ext.cred.akeyless.proxy_host" value="proxy.example.com" />
+<parameter name="ext.cred.akeyless.proxy_port" value="3128" />
+<!-- Optional Basic auth -->
+<!-- <parameter name="ext.cred.akeyless.proxy_username" value="proxy-user" /> -->
+<!-- <parameter name="ext.cred.akeyless.proxy_password" value="proxy-pass" secure="true" /> -->
+```
+
+Or reuse the MID instance proxy when it is already enabled:
+
+```xml
+<!-- Only used when ext.cred.akeyless.proxy_host is unset -->
+<parameter name="mid.proxy.use_proxy" value="true" />
+<parameter name="mid.proxy.host" value="proxy.example.com" />
+<parameter name="mid.proxy.port" value="3128" />
+```
+
+3. Restart MID → **Test credential**.
+4. On the proxy, confirm a `CONNECT gw.example.internal:443` (or your Gateway host:port) from the MID host.
+
+Host-level sanity check:
+
+```bash
+curl -v --proxy http://proxy.example.com:3128 \
+  --cacert /opt/agent/certs/akeyless-gw-ca.pem \
+  https://gw.example.internal/
+```
+
+**5) Combined: private CA + proxy**
+
+Use both blocks from steps 3 and 4 in the same `config.xml`, restart MID, then **Test credential**. This is the closest path to a locked-down enterprise deployment (TLS to Gateway through an HTTP forward proxy).
+
+**6) Suggested validation matrix**
+
+| Case | Config | Expected |
+|------|--------|----------|
+| Public Gateway, no proxy | Baseline only | Test credential succeeds |
+| Private CA, no `ca_file` | Private `gw_url` only | TLS handshake failure |
+| Private CA + `ca_file` | Step 3 | Test credential succeeds |
+| Wrong hostname in `gw_url` | Valid CA, mismatched host | Hostname validation failure |
+| Proxy without proxy props | Proxy required on network, no config | Connection / timeout failure |
+| Explicit `proxy_*` | Step 4 | Success; proxy shows `CONNECT` |
+| `mid.proxy.*` fallback | `use_proxy=true`, no `proxy_host` | Same as explicit proxy |
+| Private CA + proxy | Step 5 | Success end-to-end |
+
+For cloud-based auth types (`aws_iam` / `azure_ad` / `gcp`), run the MID on a host with a valid cloud identity. For local/dev, prefer `access_key`.
 
 ### License
 
