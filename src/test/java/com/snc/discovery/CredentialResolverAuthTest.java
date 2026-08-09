@@ -276,6 +276,36 @@ public class CredentialResolverAuthTest {
     }
 
     @Test
+    public void testUidAuthReadsUtf16BeTokenFileWithBom() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidutf16be");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-utf16be", ".txt");
+        try {
+            // UTF-16 BE with BOM (FE FF)
+            byte[] body = "uid-token-utf16be".getBytes(StandardCharsets.UTF_16BE);
+            byte[] content = new byte[2 + body.length];
+            content[0] = (byte) 0xFE;
+            content[1] = (byte) 0xFF;
+            System.arraycopy(body, 0, content, 2, body.length);
+            Files.write(tokenPath, content);
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
+
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidutf16be");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
+
+            Assert.assertEquals("uid-token-utf16be", http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
+    }
+
+    @Test
     public void testUidAuthStripsBomFromInlineToken() throws Exception {
         System.setProperty("ext.cred.akeyless.access_type", "uid");
         System.setProperty("ext.cred.akeyless.access_id", "iduidinlinebom");
