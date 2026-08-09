@@ -165,6 +165,194 @@ public class CredentialResolverAuthTest {
     }
 
     @Test
+    public void testUidAuthReadsAsciiTokenFromFile() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidascii");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-ascii", ".txt");
+        try {
+            Files.write(tokenPath, "uid-token-ascii-only".getBytes(StandardCharsets.US_ASCII));
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
+
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidascii");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
+
+            Assert.assertEquals("uid-token-ascii-only", http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
+    }
+
+    @Test
+    public void testUidAuthStripsUtf8BomFromTokenFile() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidbom");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-bom", ".txt");
+        try {
+            byte[] bom = new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+            byte[] token = "uid-token-utf8-bom".getBytes(StandardCharsets.UTF_8);
+            byte[] content = new byte[bom.length + token.length];
+            System.arraycopy(bom, 0, content, 0, bom.length);
+            System.arraycopy(token, 0, content, bom.length, token.length);
+            Files.write(tokenPath, content);
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
+
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidbom");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
+
+            Assert.assertEquals("uid-token-utf8-bom", http.lastAuthPayload.get("uid-token"));
+            Assert.assertFalse(
+                "uid-token must not start with BOM",
+                ((String) http.lastAuthPayload.get("uid-token")).startsWith("\uFEFF"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
+    }
+
+    @Test
+    public void testUidAuthReadsUtf16LeTokenFileWithBom() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidutf16");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-utf16", ".txt");
+        try {
+            // Typical Windows PowerShell Out-File encoding: UTF-16 LE with BOM (FF FE)
+            byte[] body = "uid-token-utf16le".getBytes(StandardCharsets.UTF_16LE);
+            byte[] content = new byte[2 + body.length];
+            content[0] = (byte) 0xFF;
+            content[1] = (byte) 0xFE;
+            System.arraycopy(body, 0, content, 2, body.length);
+            Files.write(tokenPath, content);
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
+
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidutf16");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
+
+            Assert.assertEquals("uid-token-utf16le", http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
+    }
+
+    @Test
+    public void testUidAuthReadsUtf16LeTokenFileWithoutBom() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidutf16nobom");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-utf16-nobom", ".txt");
+        try {
+            // UTF-16 LE without BOM: ASCII chars with null high bytes (invalid as UTF-8)
+            Files.write(tokenPath, "uid-token-utf16-nobom".getBytes(StandardCharsets.UTF_16LE));
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
+
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidutf16nobom");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
+
+            Assert.assertEquals("uid-token-utf16-nobom", http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
+    }
+
+    @Test
+    public void testUidAuthReadsUtf16BeTokenFileWithBom() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidutf16be");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-utf16be", ".txt");
+        try {
+            // UTF-16 BE with BOM (FE FF)
+            byte[] body = "uid-token-utf16be".getBytes(StandardCharsets.UTF_16BE);
+            byte[] content = new byte[2 + body.length];
+            content[0] = (byte) 0xFE;
+            content[1] = (byte) 0xFF;
+            System.arraycopy(body, 0, content, 2, body.length);
+            Files.write(tokenPath, content);
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
+
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidutf16be");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
+
+            Assert.assertEquals("uid-token-utf16be", http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
+    }
+
+    @Test
+    public void testUidAuthStripsBomFromInlineToken() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidinlinebom");
+        System.setProperty("ext.cred.akeyless.uid_token", "\uFEFFuid-token-inline-bom");
+
+        RecordingHttp http = new RecordingHttp();
+        CredentialResolver.setHttpTransport(http);
+
+        CredentialResolver cr = new CredentialResolver();
+        Map<String, String> args = new HashMap<>();
+        args.put(CredentialResolver.ARG_ID, "/suidinlinebom");
+        args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+        cr.resolve(args);
+
+        Assert.assertEquals("uid-token-inline-bom", http.lastAuthPayload.get("uid-token"));
+    }
+
+    @Test
+    public void testUidAuthFallsBackToInlineWhenUtf8BomFileIsMalformed() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidmalformedbom");
+        System.setProperty("ext.cred.akeyless.uid_token", "uid-token-inline-fallback-malformed");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-malformed-bom", ".txt");
+        try {
+            // UTF-8 BOM followed by an invalid UTF-8 sequence — must not silently corrupt;
+            // decodeStrict should fail and fall back to the inline token.
+            Files.write(tokenPath, new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF, (byte) 0xFF});
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
+
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidmalformedbom");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
+
+            Assert.assertEquals(
+                "uid-token-inline-fallback-malformed",
+                http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
+    }
+
+    @Test
     public void testUidAuthPrefersFileOverInlineToken() throws Exception {
         System.setProperty("ext.cred.akeyless.access_type", "uid");
         System.setProperty("ext.cred.akeyless.access_id", "iduidprefer");
