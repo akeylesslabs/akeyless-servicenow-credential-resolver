@@ -294,6 +294,35 @@ public class CredentialResolverAuthTest {
     }
 
     @Test
+    public void testUidAuthFallsBackToInlineWhenUtf8BomFileIsMalformed() throws Exception {
+        System.setProperty("ext.cred.akeyless.access_type", "uid");
+        System.setProperty("ext.cred.akeyless.access_id", "iduidmalformedbom");
+        System.setProperty("ext.cred.akeyless.uid_token", "uid-token-inline-fallback-malformed");
+        Path tokenPath = Files.createTempFile("akeyless-uid-token-malformed-bom", ".txt");
+        try {
+            // UTF-8 BOM followed by an invalid UTF-8 sequence — must not silently corrupt;
+            // decodeStrict should fail and fall back to the inline token.
+            Files.write(tokenPath, new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF, (byte) 0xFF});
+            System.setProperty("ext.cred.akeyless.uid_token_file", tokenPath.toString());
+
+            RecordingHttp http = new RecordingHttp();
+            CredentialResolver.setHttpTransport(http);
+
+            CredentialResolver cr = new CredentialResolver();
+            Map<String, String> args = new HashMap<>();
+            args.put(CredentialResolver.ARG_ID, "/suidmalformedbom");
+            args.put(CredentialResolver.ARG_TYPE, "ssh_password");
+            cr.resolve(args);
+
+            Assert.assertEquals(
+                "uid-token-inline-fallback-malformed",
+                http.lastAuthPayload.get("uid-token"));
+        } finally {
+            Files.deleteIfExists(tokenPath);
+        }
+    }
+
+    @Test
     public void testUidAuthPrefersFileOverInlineToken() throws Exception {
         System.setProperty("ext.cred.akeyless.access_type", "uid");
         System.setProperty("ext.cred.akeyless.access_id", "iduidprefer");

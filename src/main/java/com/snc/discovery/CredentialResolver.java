@@ -14,6 +14,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
@@ -558,37 +559,36 @@ public class CredentialResolver {
   }
 
   /**
-   * Decode UID token file bytes. Supports ASCII/UTF-8 (with or without BOM) and UTF-16 LE/BE.
-   * Prefer BOM detection; then UTF-16 LE heuristic (NUL high-bytes); otherwise strict UTF-8.
+   * Decode UID token file bytes. Supports ASCII/UTF-8 (with or without BOM), UTF-16 LE/BE with BOM,
+   * and BOM-less UTF-16 LE. Prefer BOM detection; then UTF-16 LE heuristic; otherwise strict UTF-8.
    */
   private static DecodedUidFile decodeUidTokenFileBytes(byte[] bytes) throws CharacterCodingException {
     if (bytes == null || bytes.length == 0) {
       return new DecodedUidFile("", "ascii/utf-8");
     }
     if (hasUtf8Bom(bytes)) {
-      return new DecodedUidFile(
-          new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8),
-          "utf-8-bom");
+      return new DecodedUidFile(decodeStrict(bytes, 3, StandardCharsets.UTF_8), "utf-8-bom");
     }
     if (hasUtf16LeBom(bytes)) {
-      return new DecodedUidFile(
-          new String(bytes, 2, bytes.length - 2, StandardCharsets.UTF_16LE),
-          "utf-16le");
+      return new DecodedUidFile(decodeStrict(bytes, 2, StandardCharsets.UTF_16LE), "utf-16le");
     }
     if (hasUtf16BeBom(bytes)) {
-      return new DecodedUidFile(
-          new String(bytes, 2, bytes.length - 2, StandardCharsets.UTF_16BE),
-          "utf-16be");
+      return new DecodedUidFile(decodeStrict(bytes, 2, StandardCharsets.UTF_16BE), "utf-16be");
     }
     // UTF-16 LE without BOM is valid UTF-8 (embedded NULs), so detect it before UTF-8 decode.
     if (looksLikeUtf16Le(bytes)) {
-      return new DecodedUidFile(new String(bytes, StandardCharsets.UTF_16LE), "utf-16le");
+      return new DecodedUidFile(decodeStrict(bytes, 0, StandardCharsets.UTF_16LE), "utf-16le");
     }
-    CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+    return new DecodedUidFile(decodeStrict(bytes, 0, StandardCharsets.UTF_8), "ascii/utf-8");
+  }
+
+  /** Decode with REPORT so malformed bytes fail into the inline uid_token fallback path. */
+  private static String decodeStrict(byte[] bytes, int offset, Charset charset)
+      throws CharacterCodingException {
+    CharsetDecoder decoder = charset.newDecoder()
         .onMalformedInput(CodingErrorAction.REPORT)
         .onUnmappableCharacter(CodingErrorAction.REPORT);
-    String text = decoder.decode(ByteBuffer.wrap(bytes)).toString();
-    return new DecodedUidFile(text, "ascii/utf-8");
+    return decoder.decode(ByteBuffer.wrap(bytes, offset, bytes.length - offset)).toString();
   }
 
   private static boolean hasUtf8Bom(byte[] bytes) {

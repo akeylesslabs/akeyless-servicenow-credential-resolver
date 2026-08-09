@@ -58,7 +58,7 @@ Set the following MID properties on your instance (System Properties or MID Prop
 - `ext.cred.akeyless.access_type` (string): One of `access_key`, `aws_iam`, `azure_ad`, `gcp`, `universal_identity`/`uid`, `cert`/`certificate`. Default: `access_key`
 - `ext.cred.akeyless.access_id` (string): Your Akeyless Access ID (required)
 - `ext.cred.akeyless.access_key` (string): Your Akeyless Access Key (required for `access_key` only)
-- `ext.cred.akeyless.uid_token_file` (string): File path on the MID host containing the UID token for `universal_identity` / `uid` (preferred; first non-empty line is used). Supported encodings: plain **ASCII**, **UTF-8** (with or without BOM), and **UTF-16** LE/BE (common on Windows). ASCII tokens do not need conversion to UTF-8.
+- `ext.cred.akeyless.uid_token_file` (string): File path on the MID host containing the UID token for `universal_identity` / `uid` (preferred; first non-empty line is used). Supported encodings: plain **ASCII**, **UTF-8** (with or without BOM), **UTF-16** LE/BE with BOM, and BOM-less **UTF-16 LE**. ASCII tokens do not need conversion to UTF-8.
 - `ext.cred.akeyless.uid_token` (string): Inline UID token for `universal_identity` / `uid` (fallback when `uid_token_file` is unset or unreadable)
 - `ext.cred.akeyless.cert_data` (string): Inline certificate PEM/text for `cert` auth
 - `ext.cred.akeyless.key_data` (string): Inline private key PEM/text for `cert` auth
@@ -291,7 +291,7 @@ will map to ServiceNow `username = alice`, `password = secret`.
   - Usually indicates the wrong auth flow or missing parameters. Verify `access_type` is set correctly. For CloudID flows, do not set an `access_key`. For `access_key` flows, ensure both `access_id` and `access_key` are set. For `uid`, set `uid_token_file` (preferred) or `uid_token` (fallback). For `cert`, provide cert/key material (inline or file-based).
 - UID token file encoding (`uid_token_file`):
   - **Recommended:** plain ASCII or UTF-8 **without BOM**. Akeyless UID/child tokens are ASCII-safe; do not convert ASCII to UTF-8 if the converter adds a BOM.
-  - The resolver auto-detects UTF-8 with BOM and UTF-16 LE/BE (with or without BOM) so Windows PowerShell writers still work.
+  - The resolver auto-detects UTF-8 with BOM, UTF-16 LE/BE with BOM, and BOM-less UTF-16 LE so Windows PowerShell writers still work.
   - Windows write examples:
 
 ```powershell
