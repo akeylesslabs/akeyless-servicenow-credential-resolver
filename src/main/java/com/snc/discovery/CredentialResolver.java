@@ -12,6 +12,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -267,7 +271,7 @@ public class CredentialResolver {
     String accessKey = getMidProp("ext.cred.akeyless.access_key", envOr("AKEYLESS_ACCESS_KEY", null));
     String uidTokenFile = getMidProp("ext.cred.akeyless.uid_token_file", envOr("AKEYLESS_UID_TOKEN_FILE", null));
     String uidTokenInline = getMidProp("ext.cred.akeyless.uid_token", envOr("AKEYLESS_UID_TOKEN", null));
-    String uidToken = resolveUidToken(uidTokenFile, uidTokenInline);
+    UidTokenResolution uidResolution = resolveUidToken(uidTokenFile, uidTokenInline);
     String certData = getMidProp("ext.cred.akeyless.cert_data", envOr("AKEYLESS_CERT_DATA", null));
     String keyData = getMidProp("ext.cred.akeyless.key_data", envOr("AKEYLESS_KEY_DATA", null));
     String certFileName = getMidProp("ext.cred.akeyless.cert_file_name", envOr("AKEYLESS_CERT_FILE_NAME", null));
@@ -295,7 +299,8 @@ public class CredentialResolver {
       case "universal_identity":
         authReq.put("access-type", "universal_identity");
         authReq.put("access-id", accessId);
-        authReq.put("uid-token", must(uidToken,
+        logUidTokenDiagnostics(uidResolution);
+        authReq.put("uid-token", must(uidResolution.token,
             "Missing Akeyless UID token: set MID 'ext.cred.akeyless.uid_token_file' (preferred) or "
                 + "'ext.cred.akeyless.uid_token' (fallback), or env 'AKEYLESS_UID_TOKEN_FILE' / 'AKEYLESS_UID_TOKEN'"));
         break;
@@ -495,26 +500,157 @@ public class CredentialResolver {
     return v;
   }
 
-  private static String resolveUidToken(String uidTokenFile, String uidTokenInline) {
+  /** Result of resolving a UID token from file and/or inline config (never logs the token value). */
+  private static final class UidTokenResolution {
+    final String token;
+    /** file | inline | file-fallback-inline */
+    final String source;
+    /** ascii/utf-8 | utf-8-bom | utf-16le | utf-16be; null when source is inline-only */
+    final String encodingPath;
+
+    UidTokenResolution(String token, String source, String encodingPath) {
+      this.token = token;
+      this.source = source;
+      this.encodingPath = encodingPath;
+    }
+  }
+
+  private static final class DecodedUidFile {
+    final String text;
+    final String encodingPath;
+
+    DecodedUidFile(String text, String encodingPath) {
+      this.text = text;
+      this.encodingPath = encodingPath;
+    }
+  }
+
+  private static void logUidTokenDiagnostics(UidTokenResolution resolution) {
+    int len = resolution.token == null ? 0 : resolution.token.length();
+    StringBuilder msg = new StringBuilder(96);
+    msg.append("Akeyless resolver: UID token source=").append(resolution.source)
+        .append(" len=").append(len);
+    if (resolution.encodingPath != null) {
+      msg.append(" encoding=").append(resolution.encodingPath);
+    }
+    logInfo(msg.toString());
+  }
+
+  private static UidTokenResolution resolveUidToken(String uidTokenFile, String uidTokenInline) {
+    String sanitizedInline = sanitizeUidToken(uidTokenInline);
     if (uidTokenFile != null && !uidTokenFile.isEmpty()) {
       try {
-        String tokenFromFile;
-        try (var lines = Files.lines(Path.of(uidTokenFile), StandardCharsets.UTF_8)) {
-          tokenFromFile = lines
-              .map(String::trim)
-              .filter(line -> !line.isEmpty())
-              .findFirst()
-              .orElse(null);
-        }
+        byte[] bytes = Files.readAllBytes(Path.of(uidTokenFile));
+        DecodedUidFile decoded = decodeUidTokenFileBytes(bytes);
+        String tokenFromFile = firstNonEmptyLine(decoded.text);
         if (tokenFromFile != null && !tokenFromFile.isEmpty()) {
-          return tokenFromFile;
+          return new UidTokenResolution(tokenFromFile, "file", decoded.encodingPath);
         }
         logWarn("UID token file '" + uidTokenFile + "' is empty; falling back to inline uid_token");
-      } catch (IOException e) {
-        logWarn("Unable to read UID token file '" + uidTokenFile + "'; falling back to inline uid_token", e);
+      } catch (Exception e) {
+        // Includes IOException and UncheckedIOException/CharacterCodingException from decode.
+        logWarn("Unable to read UID token file '" + uidTokenFile
+            + "'; falling back to inline uid_token", e);
+      }
+      return new UidTokenResolution(sanitizedInline, "file-fallback-inline", null);
+    }
+    return new UidTokenResolution(sanitizedInline, "inline", null);
+  }
+
+  /**
+   * Decode UID token file bytes. Supports ASCII/UTF-8 (with or without BOM) and UTF-16 LE/BE.
+   * Prefer BOM detection; then UTF-16 LE heuristic (NUL high-bytes); otherwise strict UTF-8.
+   */
+  private static DecodedUidFile decodeUidTokenFileBytes(byte[] bytes) throws CharacterCodingException {
+    if (bytes == null || bytes.length == 0) {
+      return new DecodedUidFile("", "ascii/utf-8");
+    }
+    if (hasUtf8Bom(bytes)) {
+      return new DecodedUidFile(
+          new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8),
+          "utf-8-bom");
+    }
+    if (hasUtf16LeBom(bytes)) {
+      return new DecodedUidFile(
+          new String(bytes, 2, bytes.length - 2, StandardCharsets.UTF_16LE),
+          "utf-16le");
+    }
+    if (hasUtf16BeBom(bytes)) {
+      return new DecodedUidFile(
+          new String(bytes, 2, bytes.length - 2, StandardCharsets.UTF_16BE),
+          "utf-16be");
+    }
+    // UTF-16 LE without BOM is valid UTF-8 (embedded NULs), so detect it before UTF-8 decode.
+    if (looksLikeUtf16Le(bytes)) {
+      return new DecodedUidFile(new String(bytes, StandardCharsets.UTF_16LE), "utf-16le");
+    }
+    CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+        .onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT);
+    String text = decoder.decode(ByteBuffer.wrap(bytes)).toString();
+    return new DecodedUidFile(text, "ascii/utf-8");
+  }
+
+  private static boolean hasUtf8Bom(byte[] bytes) {
+    return bytes.length >= 3
+        && (bytes[0] & 0xFF) == 0xEF
+        && (bytes[1] & 0xFF) == 0xBB
+        && (bytes[2] & 0xFF) == 0xBF;
+  }
+
+  private static boolean hasUtf16LeBom(byte[] bytes) {
+    return bytes.length >= 2
+        && (bytes[0] & 0xFF) == 0xFF
+        && (bytes[1] & 0xFF) == 0xFE;
+  }
+
+  private static boolean hasUtf16BeBom(byte[] bytes) {
+    return bytes.length >= 2
+        && (bytes[0] & 0xFF) == 0xFE
+        && (bytes[1] & 0xFF) == 0xFF;
+  }
+
+  /** True when even-length content looks like ASCII stored as UTF-16 LE (null high bytes). */
+  private static boolean looksLikeUtf16Le(byte[] bytes) {
+    if (bytes.length < 4 || (bytes.length % 2) != 0) {
+      return false;
+    }
+    int pairs = bytes.length / 2;
+    int nullHigh = 0;
+    for (int i = 0; i < bytes.length; i += 2) {
+      if (bytes[i + 1] == 0) {
+        nullHigh++;
       }
     }
-    return uidTokenInline;
+    return nullHigh >= (pairs * 3) / 4;
+  }
+
+  /** Strip BOM and return the first non-empty trimmed line (or null). */
+  private static String sanitizeUidToken(String raw) {
+    if (raw == null) {
+      return null;
+    }
+    return firstNonEmptyLine(raw);
+  }
+
+  private static String firstNonEmptyLine(String text) {
+    if (text == null) {
+      return null;
+    }
+    String normalized = text;
+    if (!normalized.isEmpty() && normalized.charAt(0) == '\uFEFF') {
+      normalized = normalized.substring(1);
+    }
+    for (String line : normalized.split("\\R", -1)) {
+      String trimmed = line.trim();
+      if (!trimmed.isEmpty() && trimmed.charAt(0) == '\uFEFF') {
+        trimmed = trimmed.substring(1).trim();
+      }
+      if (!trimmed.isEmpty()) {
+        return trimmed;
+      }
+    }
+    return null;
   }
 
   private static byte[] resolvePemMaterial(
